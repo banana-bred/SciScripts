@@ -1,0 +1,196 @@
+# Determine the coordinates of H₂O⁺ at NDISP displacements from equilibrium
+# along each of its normal modes, at the center of mass/charge (CENTER).
+# Center of charge such that electric dipole μ=0
+memory 2 GB
+set_num_threads(8)
+
+# -- defaults
+NDISP = 5
+QMAX = 0.5 # max normal mode displacement in each direction
+NMODES = 3
+CENTER = "charge" # or mass or none
+
+CENTER = CENTER.lower()
+
+molecule H2OX {
+  1 2
+  O   0.0000000000 -0.0000000000 -0.5783307800
+  H   0.0000000000 -0.8083818475 -0.0139369261
+  H   0.0000000000  0.8083818475 -0.0139369261
+  # O
+  # H 1 1.00
+  # H 1 1.00 2 109.3
+  no_com
+  no_reorient
+  symmetry Cs
+}
+
+set {
+  basis cc-pvdz
+  reference uhf
+  normal_modes_write true
+  writer_file_label H2OX
+  scf_type df
+  # maxiter 200
+}
+
+import numpy as np
+import psi4
+from psi4.driver.qcdb import vib as vibmod
+
+# ------------------------------------------
+# Helper routines
+# ------------------------------------------
+"Nice tag for filenames"
+def tag(q): return f"q{q:+.3f}"
+
+"Determine the electric dipole"
+def get_dipole_au(wfn):
+  for key in ("CURRENT DIPOLE", "SCF DIPOLE", "DIPOLE"):
+    try:
+      v = wfn.variable(key)
+      arr = np.array(v, dtype=float).reshape(3,)
+      return arr
+    except Exception:
+      pass
+
+  # fallback
+  comps = []
+  for ax in ("X", "Y", "Z"):
+    for key in (f"CURRENT DIPOLE {ax}", f"SCF DIPOLE {ax}", f"DIPOLE {ax}"):
+      try:
+        comps.append(float(wfn.variable(key)))
+        break
+      except Exception:
+        continue
+
+  if len(comps) == 3:
+    return np.array(comps, dtype=float)
+
+  raise Exception("Could not find dipole variables on the wavefunction (CURRENT/SCF DIPOLE)")
+
+"Recenter a geometry s.t. the electric dipole is zero"
+def recenter_to_zero_dipole(geom_bohr, mol_template):
+  Qtot = float(mol_template.molecular_charge()) # charge Qtot, not normal mode coordinate Q
+  if abs(Qtot) < 1e-12:
+    raise Exception("Center of charge is not defined for neutrals")
+
+  m = mol_template.clone()
+  m.set_geometry(psi4.core.Matrix.from_array(geom_bohr))
+  m.update_geometry()
+
+  # -- single SCF calculation to get dipole
+  E, w = psi4.energy('scf', molecule=m, return_wfn=True)
+
+###############
+  mu = get_dipole_au(w)  # ea0
+  psi4.core.print_out(
+      f"   mu (ea0) = [{mu[0]: .8f}, {mu[1]: .8f}, {mu[2]: .8f}]  |mu|={np.linalg.norm(mu):.8f}\n"
+  )
+  shift_bohr = mu / Qtot
+  psi4.core.print_out(
+      f"   shift (bohr) = [{shift_bohr[0]: .8f}, {shift_bohr[1]: .8f}, {shift_bohr[2]: .8f}]  "
+      f"|shift|={np.linalg.norm(shift_bohr):.8f}\n"
+  )
+###############
+
+  μ = get_dipole_au(w) # ea₀
+  shift = μ / Qtot # a₀
+  geom_shifted = geom_bohr - shift[None, :] # r' = r - μ/Qtot
+
+  return geom_shifted, μ, E
+
+"Recenter the geometry given an array of weights"
+def recenter_weighted(geom_bohr, weights):
+  w = weights / weights.sum()
+  ctr = (w[:, None] * geom_bohr).sum(axis=0)
+  return geom_bohr - ctr
+# ------------------------------------------
+
+# -- optimize then harmonic frequencies
+optimize('scf')
+E0, wfn0 = frequency('scf', return_wfn=True)
+
+# ------------------------------------------
+# Get normal mode info
+# ------------------------------------------
+
+fa     = wfn0.frequency_analysis
+omega_c = fa["omega"].data # complex cm⁻¹
+omega  = vibmod.filter_omega_to_real(omega_c) # real cm⁻¹
+
+TRV    = np.array(fa["TRV"].data)                  # labels 'T','R','V'
+x      = np.array(fa["x"].data)                    # unweighted normal modes, (a₀) (nDOF×nDOF)
+Xtp0   = np.array(fa["Xtp0"].data)    # turning point v=0 amplitude (a₀) (nDOF,)
+
+mol0  = wfn0.molecule()
+natoms   = mol0.natom()
+geom0 = np.array(mol0.geometry())             # Equilibrium a₀
+symbols = [mol0.symbol(i) for i in range(natoms)]
+bohr2ang = psi4.constants.bohr2angstroms
+
+# -- determine vibrational mode indices
+vib_idx = np.where(TRV == "V")[0]
+if vib_idx.size == 0:
+  raise Exception ("No vibrational modes found (TRV == 'V')")
+elif vib_idx.size != NMODES:
+  raise Exception(f"\nFound {vib_idx.size} modes when there should only be {NMODES}")
+
+# -- sort modes by frequency
+vib_idx = vib_idx[np.argsort(omega[vib_idx])]
+
+# -- recentering weights
+if CENTER not in ("charge", "mass", "none"):
+  raise Exception('Center must be one of "CHARGE", "MASS", "NONE"')
+
+# -- Q-grid (normal mode)
+if NDISP < 1:
+  raise Exception("NDISP must be ≥ 1")
+
+Qvals = np.array([0.0]) if NDISP == 1 else np.linspace(-QMAX, QMAX, NDISP)
+
+psi4.core.print_out("\n--- Normal-mode geometry generation ---\n")
+psi4.core.print_out(f"NDISP={NDISP}  QMAX={QMAX}  CENTER={CENTER}\n")
+psi4.core.print_out(f"Vibrational mode indices (energy sorted): {list(map(int, vib_idx))}\n\n")
+
+# -- final loop over modes
+for imode, midx in enumerate(vib_idx, start=1):
+  mode_vec = x[:, midx].reshape((natoms, 3))
+  amp0 = float(Xtp0[midx]) # turning point for q=1
+
+  psi4.core.print_out(f"Mode {imode:02d} (idx={int(midx)}): ω={omega[midx]:.2f} cm⁻¹, Xtp0={amp0:.6f} a₀\n")
+
+  fname = f"H2OX_mode{imode:02d}.xyz"
+  with open(fname, "w") as f:
+    f.write(f"{mol0.name()}\n")
+    f.write(f"NATOMS={natoms}\n")
+    f.write(f"XYZ units=ang\n")
+    f.write(f"NDISP={NDISP}\n")
+    f.write(f"mode={imode:02d}\n")
+    f.write(f"ω={omega[midx]:.2f} cm⁻¹\n")
+    f.write(f"CENTER= {CENTER if CENTER == 'mass' else 'dipole(μ→0)'}\n\n")
+    for Q in Qvals:
+      geom = geom0 + (Q*amp0) * mode_vec
+
+      μ = None
+      E = None
+      if CENTER == "none":
+        pass
+      elif CENTER == "mass":
+        geom = recenter_weighted(geom, M)
+      elif CENTER == "charge":
+        geom, μ, E = recenter_to_zero_dipole(geom, mol0)
+
+      geomA = geom * bohr2ang
+
+      if CENTER == "charge":
+        μnorm = float(np.linalg.norm(μ))
+        f.write(f"Q={Q:+.3f} |μ|={μnorm:.6f} ea₀ (before shift)\n")
+      else:
+        f.write(f"Q={Q:+.3f}\n")
+
+      for sym, (Xc, Yc, Zc) in zip(symbols, geomA):
+        f.write(f"{sym:2s} {Xc: .10f} {Yc: .10f} {Zc: .10f}\n")
+
+
+psi4.core.print_out("\nDone !")
