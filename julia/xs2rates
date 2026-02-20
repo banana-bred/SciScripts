@@ -1,0 +1,218 @@
+#!/bin/env zsh
+
+PROGRAM="$(basename "$0")"
+JULIABIN="${0:h}"
+JPROGRAM="${JULIABIN}/${PROGRAM}.jl"
+
+usage() {
+
+    cat <<help
+
+$PROGRAM
+
+    Wrapper for my julia script $PROGRAM (${JPROGRAM}), which converts scattering data between
+    cross sections and rate coefficients. The rate coefficient (no kinetic averaging or convolution)
+    is essentially just the cross section multiplied by the collider's velocity, (2*E/m)^1/2
+
+    usage: ${PROGRAM} [operation] [operand]
+
+    operations:               operand:   function:
+
+        -h                    none       show this message.
+        -i,--input            file       specify input  file
+        -o,--output           file       specify output file
+        --input-type          string     the input data type. Should be "XS" for cross sections or "RATE" for
+                                         rate coefficients
+        --xs-units            string     the unit type of the cross section data   (e.g., "cm" for cm^2).
+        --rate-units-l        string     the length unit of the rate coefficient data   (e.g., "cm" for cm^3/s).
+        --rate-units-t        string     the time unit of the rate coefficient data   (e.g., "s" for cm^3/s).
+        --nrg-units           string     the unit type of the input energy (e.g., "eV" for electron volts).
+        --no-ignore-comments  none       if supplied, do not ignore lines with comment characters. This will
+                                         probably break the script. If omitted, ignore comments.
+        -comment_char         string     the comment character (default '#'). This must be a single character.
+
+    The following would be a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -i cross_sections.dat -o rates.dat \\
+                  --input-type "XS" \\
+                  --xs-units cm \\
+                  --rate-units-l cm \\
+                  --rate-units-t s \\
+                  --nrg-units eV \\
+                  -comment_char "#" \\
+
+    Input file: a file of electron energies (Eel) and cross sections (σ) or rate coefficients (α)
+    in any units of energy and length^2 (σ) or length^3/s (α), formatted as
+
+      Eel  σ/α
+       .   .
+       .   .
+       .   .
+
+    Output file: a conversion between σ and α in the same format
+
+      Eel  α/σ
+      .    .
+      .    .
+      .    .
+
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !! Needed : my units script !!
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+      https://github.com/banana-bred/units
+
+help
+}
+
+die() {
+
+  exit_code=1
+  error_message="$1"
+
+  echo  1>&2
+	echo "${PROGRAM}: ${error_message}" 1>&2
+  echo  1>&2
+
+  usage
+
+  exit "${exit_code}"
+
+}
+
+main() {
+
+  ignore_comments="true"
+  comment_char="#"
+
+	while :; do
+		case $1 in
+
+			-h|-\?|--help)
+				usage
+				exit 0
+				;;
+
+			-i | --input)
+				[ "$2" ] && input="${2}" && shift || die 'ERROR: "--input" requires a non-empty option argument.'
+				;;
+			-i= | --input=)
+				die 'ERROR: "--input" requires a non-empty argument.'
+				;;
+			-i=?* | --input=?*)
+				input="${1#*=}"
+				;;
+
+			-o | --output)
+				[ "$2" ] && output="${2}" && shift || die 'ERROR: "--output" requires a non-empty option argument.'
+				;;
+			-o= | --output=)
+				die 'ERROR: "--output" requires a non-empty argument.'
+				;;
+			-o=?* | --output=?*)
+				output="${1#*=}"
+				;;
+
+			--input-type)
+				[ "$2" ] && input_type="${2}" && shift || die 'ERROR: "--input-type" requires a non-empty option argument.'
+				;;
+			--input-type=)
+				die 'ERROR: "--input-type" requires a non-empty argument.'
+				;;
+			--input-type=?*)
+				input_type="${1#*=}"
+				;;
+
+			--xs-units )
+				[ "$2" ] && XS_units="${2}" && shift || die 'ERROR: "--xs-units" requires a non-empty option argument.'
+				;;
+			--xs-units=)
+				die 'ERROR: "--xs-units" requires a non-empty argument.'
+				;;
+			--xs-units=?*)
+				XS_units="${1#*=}"
+				;;
+
+			--rate-units-l )
+				[ "$2" ] && RATE_units_l="${2}" && shift || die 'ERROR: "--rate-units-l" requires a non-empty option argument.'
+				;;
+			--rate-units=)
+				die 'ERROR: "--rate-units-l" requires a non-empty argument.'
+				;;
+			--rate-units=?*)
+				RATE_units_l="${1#*=}"
+				;;
+
+			--rate-units-t )
+				[ "$2" ] && RATE_units_t="${2}" && shift || die 'ERROR: "--rate-units-t" requires a non-empty option argument.'
+				;;
+			--rate-units=)
+				die 'ERROR: "--rate-units-t" requires a non-empty argument.'
+				;;
+			--rate-units=?*)
+				RATE_units_t="${1#*=}"
+				;;
+
+			--nrg-units )
+				[ "$2" ] && nrg_units="${2}" && shift || die 'ERROR: "--nrg-units" requires a non-empty option argument.'
+				;;
+			--nrg-units=)
+				die 'ERROR: "--nrg-units" requires a non-empty argument.'
+				;;
+			--nrg-units=?*)
+				nrg_units="${1#*=}"
+				;;
+
+      --no-ignore-comments)
+        ignore_comments="false"
+        ;;
+
+			-comment_char)
+				[ "$2" ] && comment_char="${2}" && shift || die 'ERROR: "-comment_char" requires a non-empty option argument.'
+				;;
+			-comment_char=)
+				die 'ERROR: "-comment_char" requires a non-empty argument.'
+				;;
+			-comment_char=?*)
+				comment_char="${1#*=}"
+				;;
+
+			--)
+				shift
+				break
+				;;
+
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}"
+				;;
+
+      *)
+        break
+        ;;
+
+			esac
+			shift
+
+	done
+
+  flag=false
+  [ -z "${input}" ] && echo "Need an input file with -i" 1>&2 && flag=true
+  [ -e "${input}" ] || (echo "Input file""'""$input""'"" does not exist" 1>&2 && flag=true)
+  [ -z "${output}" ] && echo "Need an output file with -o" 1>&2 && flag=true
+  [ -z "${XS_units}" ] && echo "Need to define input cross section units with --xs-units" 1>&2 && flag=true
+  [ -z "${RATE_units_l}" ] && echo "Need to define rate coefficient length units with --rate-units-l" 1>&2 && flag=true
+  [ -z "${RATE_units_t}" ] && echo "Need to define rate coefficient time units with --rate-units-t" 1>&2 && flag=true
+  [ -z "${nrg_units}" ] && echo "Need to define input electron energy units with --nrg-units" 1>&2 && flag=true
+  $flag && die "Variable(s) not defined. See above ^^^"
+
+  # -- get mulitiplicative constants to convert data to the expected units
+  xsConversion="$(units 1 "$XS_units" bohr)"
+  rateLengthConversion="$(units 1 "$RATE_units_l" bohr)"
+  rateTimeConversion="$(units 1 "$RATE_units_t" s)"
+  nrgConversion="$(units 1 "$nrg_units" hartree)"
+
+  julia "$JPROGRAM" "$input" "$output" "$xsConversion" "$rateLengthConversion" "$rateTimeConversion" "$nrgConversion" "$comment_char" "$ignore_comments" "$input_type"
+
+}
+
+main "$@"

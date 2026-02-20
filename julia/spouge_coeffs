@@ -1,0 +1,101 @@
+#!/bin/env zsh
+#compdef spouge_coeffs
+function _spouge-coeffs() {
+  _arguments -s \
+    '(-h --help)'{-h,--help}'[show this help message]' \
+    '(-a)'{-a}'[number of coefficients A]:A (A>3):_guard "[[ $words[CURRENT] -ge 3 ]]" "integer >= 3"' \
+    '(-b --bits)'{-b,--bits}'[precision in bits (default 256)]:bits:_guard "[[ $words[CURRENT] ]] -ge 1 ]]" integer' \
+    '(--log)'{--log}'[Return the natural logarithm of the spouge coefficients ?]' \
+    '*:files:_files'
+}
+
+emulate -L zsh
+set -o errexit -o nounset -o pipefail
+
+# -- globals
+typeset -g PROGRAM="${0:t}" # basename
+typeset -g JULIABIN="${0:h}"
+typeset -g JPROGRAM="${JULIABIN}/${PROGRAM}.jl"
+
+usage() {
+
+    cat <<HELP
+
+$PROGRAM
+
+    Wrapper for my julia script $PROGRAM (${JPROGRAM}), which produces \`a\` Spouge coefficients
+    computed with \`BITS\` accuracy for evaluating the gamma function.
+
+    usage: ${PROGRAM} -a a [-b BITS]
+
+    operations:               operand:   function:
+
+        -h                    none       show this message.
+        -a                    integer    number of coefficients
+        -b,--bits             integer    number of bits (default 256)
+        --log                 none       return ln(ck)
+
+    The following would be a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -a 40 --bits 512
+
+    Output : the spouge coefficients
+        c₀
+        c₁
+        ..
+
+HELP
+}
+
+die() {
+  print -u2 ""
+  print -u2 -- "$PROGRAM: $*"
+  print -u2 ""
+  usage
+  exit 2
+}
+
+main() {
+
+  zmodload zsh/zutil
+
+  # -- parse options
+  local -a Help Aopt BitsOpt LogOpt
+  local flag=false
+  zparseopts -E \
+    h=Help -help=Help \
+    a:=Aopt \
+    b:=BitsOpt -bits:=BitsOpt \
+    -log=LogOpt
+
+  (( ${#Help} ))   && {usage ; return 0}
+  (( ${#LogOpt} )) && logCoeffs=true
+
+  # -- defaults
+  local a bits=256 logCoeffs=false
+
+  # -- require -a
+  if (( ${#Aopt} == 0 )); then
+    print -u2 -- "$PROGRAM: missing required option: -a"
+    usage
+    exit 2
+  fi
+
+  # -- set values
+  a="${Aopt[-1]}"
+  (( ${#BitsOpt} )) && bits="${BitsOpt[-1]}"
+
+  # -- check values
+  ((a < 3)) && echo "The integer a must be at least 3" 1>&2 && flag=true
+  ((bits < 0)) && echo "Cant have bits < 0" 1>&2 && flag=true
+  $flag && die "Variable(s) not defined. See above ^^^"
+
+  # -- check julia
+  [[ -x "${JULIABIN}" ]] || die "Julia executable not found: ${JULIABIN}"
+  [[ -r "${JPROGRAM}" ]] || die "Julia script not found/readable: ${JPROGRAM}"
+
+  julia "${JPROGRAM}" "${a}" "${bits}" "${logCoeffs}"
+
+}
+
+main "$@"

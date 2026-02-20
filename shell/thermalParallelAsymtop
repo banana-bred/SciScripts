@@ -1,0 +1,67 @@
+#!/bin/env zsh
+
+Nmin=0
+Nmax=4
+dir=Smat/doublet
+lifetimes_file="doublet.channels"
+thermal_dir=thermal
+njobs=${NJOBS:-$(nproc)}
+
+[[ -z "$(command -v parallel)" ]] && print -u2 -- "GNU Parallel is not installed. Maybe install it ?"
+
+jobfile="$(mktemp)"
+trap 'rm -f "${jobfile}"' EXIT
+
+mkdir -p "$thermal_dir"
+
+typeset -A energy
+
+while read -r N Ka Kc E lifetime; do
+  [[ -z "${N:-}" ]] && continue
+  [[ "${N[1]}" == "#" ]] && continue
+
+  # N,Ka,Kc as key; store energy
+  key="${N},${Ka},${Kc}"
+  energy[$key]="$E"
+done < "$lifetimes_file"
+
+for file in "${dir}"/*_*_*.*_*_*.dat(N) ; do
+  base="${file:t}"
+  states="${base%.dat}"
+  states="${states#Smat.*}"
+
+  # -- split .
+  IFS='.' read -r left right <<< "$states"
+
+  # -- split _
+  IFS="_" read -r N Ka Kc <<< "$left"
+  IFS="_" read -r Np Kap Kcp <<< "$right"
+
+  key="${N},${Ka},${Kc}"
+  keyp="${Np},${Kap},${Kcp}"
+
+  E="${energy[$key]:-}"
+  Ep="${energy[$keyp]:-}"
+
+  input="$file"
+  output="${thermal_dir}/thermal.${N}_${Ka}_${Kc}.${Np}_${Kap}_${Kcp}.dat"
+
+  # -- don't extrap excitation
+  [[ Ep -gt E ]] && extrap="" || extrap="--extrap"
+
+  print -- "Excitation: N,Ka,Kc->N',Ka',Kc': (${N},${Ka},${Kc}) -> (${Np}_${Kap}_${Kcp})"
+  print -r -- "$input|$output|$extrap" >> "$jobfile"
+
+done
+
+cat "$jobfile" | xargs -P "${njobs}" -I{} zsh -c '
+  IFS="|" read -r input output extrap <<< "{}"
+  print -r -- "Convolving $input -> $output"
+  thermal \
+    -i "$input" \
+    -o "$output" \
+    --Ti=10 --Tf=10000 --nT=100 --input-energy-units=ev --input-xs-units=cm \
+    --logx \
+    --electron-energy-min=1e-8 \
+    --num-extrap-energies=1000 "$extrap"
+'

@@ -1,0 +1,251 @@
+#!/bin/zsh
+
+PROGRAM="$(basename "$0")"
+JULIABIN="${0:h}"
+JPROGRAM="${JULIABIN}/morseFit.jl"
+
+usage() {
+
+    cat <<help
+
+$PROGRAM
+
+    Wrapper for my julia script located at ${JPROGRAM}
+
+    usage: ${PROGRAM} [operation] [operand]
+
+    operations:                 operand:        function:
+
+        -h                      none            show this message.
+        -i,--input              file            specify input  file
+        -o,--output             file            specify output file
+        --tailonly              none            if specified, only fit the tail (large r) of the potential
+        --headonly              none            if specified, only fit the head (small r) of the potential
+        --rcut                  number          cutoff   distance for the fit input, only used if fitting just the potential head/tail
+        --rmin                  number          smallest distance for the fit output. Ignored if --tailonly is supplied
+        --rmax                  number          largest  distance for the fit output
+        --rstep                 number          linear step size  for the fit output
+        -a                      number          initial guess for the 'a'  parameter in the Morse potetial controlling the well width
+        -r0                     number          initial guess for the 'r0' parameter in the Morse potetial controlling the location of the well minimum
+        -D                      number          initial guess for the 'D'  parameter in the Morse potetial controlling the well depth
+        --dissociation-limit    number          initial guess for the absolute value of the the dissociation limit (assumed to be negative) of the potential.
+        --positive-dissoc-limit none            if specified, the dissociation limit is taken to have a positive value
+        --print-parameters      none            if specified, print the fit parameters
+
+
+    The following is a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -i input.dat -o output.dat --tailonly --rcut=2.6 --rstep=0.01 --rmax=10 --dissociation-limit 75 --positive-dissoc-limit
+
+help
+}
+
+die() {
+
+  exit_code=1
+  error_message="$1"
+
+  echo  1>&2
+	echo "${PROGRAM}: ${error_message}" 1>&2
+  echo  1>&2
+
+  usage
+
+  exit "${exit_code}"
+
+}
+
+lowercase() {
+  echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+main() {
+
+  a=0.5
+  r0=0.5
+  D=0.5
+  dissociationLimit=0.5
+  flipDissoc="true"
+  tailOnly="false"
+  headOnly="false"
+  printparams="false"
+
+	while :; do
+		case $1 in
+			-h|-\?|--help)
+				usage
+				exit 0
+				;;
+
+			-i | --input)
+				[ "$2" ] && input="${2}" && shift || die 'ERROR: "--input" requires a non-empty option argument.'
+				;;
+			-i= | --input=)
+				die 'ERROR: "--input" requires a non-empty argument.'
+				;;
+			-i=?* | --input=?*)
+				input="${1#*=}"
+				;;
+
+			-o | --output)
+				[ "$2" ] && output="${2}" && shift || die 'ERROR: "--output" requires a non-empty option argument.'
+				;;
+			-o= | --output=)
+				die 'ERROR: "--output" requires a non-empty argument.'
+				;;
+			-o=?* | --output=?*)
+				output="${1#*=}"
+				;;
+
+			--rcut)
+				[ "$2" ] && rcut="${2}" && shift || die 'ERROR: "--rcut" requires a non-empty option argument.'
+				;;
+			--rcut=)
+				die 'ERROR: "--rcut" requires a non-empty argument.'
+				;;
+			--rcut=?*)
+				rcut="${1#*=}"
+				;;
+
+			--rmin)
+				[ "$2" ] && rmin="${2}" && shift || die 'ERROR: "--rcut" requires a non-empty option argument.'
+				;;
+			--rmin=)
+				die 'ERROR: "--rmin" requires a non-empty argument.'
+				;;
+			--rmin=?*)
+				rmin="${1#*=}"
+				;;
+
+			--rmax)
+				[ "$2" ] && rmax="${2}" && shift || die 'ERROR: "--rcut" requires a non-empty option argument.'
+				;;
+			--rmax=)
+				die 'ERROR: "--rmax" requires a non-empty argument.'
+				;;
+			--rmax=?*)
+				rmax="${1#*=}"
+				;;
+
+			--rstep)
+				[ "$2" ] && rstep="${2}" && shift || die 'ERROR: "--rstep" requires a non-empty option argument.'
+				;;
+			--rstep=)
+				die 'ERROR: "--rstep" requires a non-empty argument.'
+				;;
+			--rstep=?*)
+				rstep="${1#*=}"
+				;;
+
+			--dissociation-limit)
+				[ "$2" ] && dissociationLimit="${2}" && shift || die 'ERROR: "--dissociation-limit" requires a non-empty option argument.'
+				;;
+			--dissociation-limit=)
+				die 'ERROR: "--dissociation-limit" requires a non-empty argument.'
+				;;
+			--dissociationLimit=?*)
+				dissociationLimit="${1#*=}"
+				;;
+
+			-a)
+				[ "$2" ] && a="${2}" && shift || die 'ERROR: "-a" requires a non-empty option argument.'
+				;;
+			-a=)
+				die 'ERROR: "-a" requires a non-empty argument.'
+				;;
+			-a=?*)
+				a="${1#*=}"
+				;;
+
+			-r0)
+				[ "$2" ] && r0="${2}" && shift || die 'ERROR: "-r0" requires a non-empty option argument.'
+				;;
+			-r0=)
+				die 'ERROR: "-r0" requires a non-empty argument.'
+				;;
+			-r0=?*)
+				r0="${1#*=}"
+				;;
+
+			-D)
+				[ "$2" ] && D="${2}" && shift || die 'ERROR: "-D" requires a non-empty option argument.'
+				;;
+			-D=)
+				die 'ERROR: "-D" requires a non-empty argument.'
+				;;
+			-D=?*)
+				D="${1#*=}"
+				;;
+
+      --tailonly)
+        tailOnly="true"
+        ;;
+
+      --headonly)
+        headOnly="true"
+        ;;
+
+      --positive-dissoc-limit)
+        flipDissoc="false"
+        ;;
+
+      --print-parameters)
+        printparams="true"
+        ;;
+
+			--)
+				shift
+				break
+				;;
+
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}"
+				;;
+
+      *)
+        break
+        ;;
+
+			esac
+			shift
+
+	done
+
+  flag=false
+
+  [ -z "${input}" ] && echo "Need an input file (--input)" 1>&2 && flag=true
+  [ -r "${input}" ] || (echo "Input file""'""$input""'"" does not exist or cannot be read" 1>&2 && flag=true)
+  [ -z "${output}" ] && echo "Need an output file (--output)" 1>&2 && flag=true
+  [ -z "${rstep}" ] && echo "Need a step size (--rstep)" 1>&2 && flag=true
+  [ -w "${input}" ] || (echo "Output file""'""$output""'"" does not exist or cannot be written to" 1>&2 && flag=true)
+
+  if [ "${tailOnly}" == "true" ] ; then
+
+    [ "${headOnly}" == "true" ] && echo "--headonly and --tailonly cannot both be supplied" && flag=true
+    [ -z "${rcut}" ] && echo "Need to provide a cutoff distance (--rcut) if you only want to fit the potential tail" && flag=true
+    [ -z "${rmax}" ] && echo "Need a maximum distance (--rmax)" 1>&2 && flag=true
+    rmin=0.0
+
+  elif [ "${headOnly}" == "true" ] ; then
+
+    [ -z "${rcut}" ] && echo "Need to provide a cutoff distance (--rcut) if you only want to fit the potential head" && flag=true
+    [ -z "${rmin}" ] && echo "Need to provide a minimum distance (--rmin) if you want to fit the potential head" && flag=true
+    rmax=0.0
+
+  else
+
+    [ -z "${rmin}" ] && echo "Need to provide a minimum distance (--rmin) if you want to fit the whole potential" && flag=true
+    [ -z "${rmax}" ] && echo "Need a maximum distance (--rmax)" 1>&2 && flag=true
+    rcut=0.0
+
+  fi
+
+  $flag && die "Errors encountered. See above ^^^"
+
+  [ "${flipDissoc}" == "true" ] && dissociationLimit="-$dissociationLimit"
+
+  julia "$JPROGRAM" "$input" "$output" "$headOnly" "$tailOnly" "$rcut" "$rmin" "$rmax" "$rstep" "$a" "$r0" "$D"  "$dissociationLimit" "$printparams"
+
+}
+
+main "$@"

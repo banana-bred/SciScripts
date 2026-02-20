@@ -1,0 +1,246 @@
+#!/bin/zsh
+
+PROGRAM="$(basename "$0")"
+JULIABIN="${0:h}"
+JPROGRAM="${JULIABIN}/thermal.jl"
+
+usage() {
+
+    cat <<help
+
+$PROGRAM
+
+    Wrapper for my julia script $PROGRAM (${JPROGRAM}), which produces state-selected
+    kinetic rate coefficients from cross sections behaving as 1/E (E being electron energy)
+    at the E=0 threshold.
+
+    usage: ${PROGRAM} [operation] [operand]
+
+    operations:               operand:   function:
+
+        -h                    none       show this message.
+        -i,--input            file       specify input  file
+        -o,--output           file       specify output file
+        --logx                none       if supplied, a logarithmic grid will be used.
+        --Ti                  float      lowest  kinetic temperature (K)
+        --Tf                  float      highest kinetic temperature (K)
+        --nT                  integer    number of kinetic temperatures
+        --input-xs-units      string     the unit type of the input data   (e.g., "cm" for cm^2).
+                                         Output rates will be in these units ^3 / s
+        --input-energy-units  string     the unit type of the input energy (e.g., "eV" for electron volts).
+        --extrap              none       extrapolate cross sections to E = 0 threshold assuming 1/E behavior ? Otherwise,
+                                         assume it is zero.
+        --electron-energy-min float      lowest electron energy (should be closer to 0 than the lowest available point)
+        --num-extrap-energies integer    number of extrapolation energies (extrapolating to 0)
+        --comment-char        character  the character that denotes a line comment in the file. default: '#'
+
+    The following would be a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -i data_to_convolve.dat -o convolved_data.dat \\
+                  --logx \\
+                  --Ti=1e-6 \\
+                  --Tf=1e3 \\
+                  --extrap \\
+                  --electron-energy-min=1e-8 \\
+                  --num-extrap-energies=1000 \\
+                  --nT=500 \\
+                  --input-xs-units=cm \\
+                  --input-energy-units=eV
+
+    Input file: a file of electron energies (Eel) and cross sections (σ)
+    in any units of energy and length^2, formatted as
+
+      Eel  σ
+       .   .
+       .   .
+       .   .
+
+    Output file: a file of temperatures (T) in K and rate coefficients (α) in cm^3/s, formatted as
+
+      T  α
+      .  .
+      .  .
+      .  .
+
+    Needed : my units script
+
+      https://github.com/banana-bred/units
+
+help
+}
+
+die() {
+
+  exit_code=1
+  error_message="$1"
+
+  echo  1>&2
+	echo "${PROGRAM}: ${error_message}" 1>&2
+  echo  1>&2
+
+  usage
+
+  exit "${exit_code}"
+
+}
+
+main() {
+
+  logx="false"
+  extrap="false"
+  comment="#"
+
+	while :; do
+		case $1 in
+			-h|-\?|--help)
+				usage
+				exit 0
+				;;
+
+			-i | --input)
+				[ "$2" ] && input="${2}" && shift || die 'ERROR: "--input" requires a non-empty option argument.'
+				;;
+			-i= | --input=)
+				die 'ERROR: "--input" requires a non-empty argument.'
+				;;
+			-i=?* | --input=?*)
+				input="${1#*=}"
+				;;
+
+			-o | --output)
+				[ "$2" ] && output="${2}" && shift || die 'ERROR: "--output" requires a non-empty option argument.'
+				;;
+			-o= | --output=)
+				die 'ERROR: "--output" requires a non-empty argument.'
+				;;
+			-o=?* | --output=?*)
+				output="${1#*=}"
+				;;
+
+      --logx)
+        logx="true"
+        ;;
+
+			--Ti )
+				[ "$2" ] && Ti="${2}" && shift || die 'ERROR: "--Ti" requires a non-empty option argument.'
+				;;
+			--Ti=)
+				die 'ERROR: "--Ti" requires a non-empty argument.'
+				;;
+			--Ti=?*)
+				Ti="${1#*=}"
+				;;
+
+			--Tf )
+				[ "$2" ] && Tf="${2}" && shift || die 'ERROR: "--Tf" requires a non-empty option argument.'
+				;;
+			--Tf=)
+				die 'ERROR: "--Tf" requires a non-empty argument.'
+				;;
+			--Tf=?*)
+				Tf="${1#*=}"
+				;;
+
+			--electron-energy-min )
+				[ "$2" ] && electronEnergyMin="${2}" && shift || die 'ERROR: "--electron-energy-min" requires a non-empty option argument.'
+				;;
+			--electron-energy-min=)
+				die 'ERROR: "--electron-energy-min" requires a non-empty argument.'
+				;;
+			--electron-energy-min=?*)
+				electronEnergyMin="${1#*=}"
+				;;
+
+			--num-extrap-energies )
+				[ "$2" ] && numExtrapE="${2}" && shift || die 'ERROR: "--num-extrap-energies" requires a non-empty option argument.'
+				;;
+			--num-extrap-energies=)
+				die 'ERROR: "--num-extrap-energies" requires a non-empty argument.'
+				;;
+			--num-extrap-energies=?*)
+				numExtrapE="${1#*=}"
+				;;
+
+			--nT )
+				[ "$2" ] && nT="${2}" && shift || die 'ERROR: "--nT" requires a non-empty option argument.'
+				;;
+			--nT=)
+				die 'ERROR: "--nT" requires a non-empty argument.'
+				;;
+			--nT=?*)
+				nT="${1#*=}"
+				;;
+
+			--input-xs-units )
+				[ "$2" ] && inputXSUnits="${2}" && shift || die 'ERROR: "--input-xs-units" requires a non-empty option argument.'
+				;;
+			--input-xs-units=)
+				die 'ERROR: "--input-xs-units" requires a non-empty argument.'
+				;;
+			--input-xs-units=?*)
+				inputXSUnits="${1#*=}"
+				;;
+
+			--input-energy-units )
+				[ "$2" ] && inputEUnits="${2}" && shift || die 'ERROR: "--input-energy-units" requires a non-empty option argument.'
+				;;
+			--input-energy-units=)
+				die 'ERROR: "--input-energy-units" requires a non-empty argument.'
+				;;
+			--input-energy-units=?*)
+				inputEUnits="${1#*=}"
+				;;
+
+			--comment-char )
+				[ "$2" ] && comment="${2}" && shift || die 'ERROR: "--comment-char" requires a non-empty option argument.'
+				;;
+			--comment-char=)
+				die 'ERROR: "--comment-char" requires a non-empty argument.'
+				;;
+			--input-energy-units=?*)
+				comment="${1#*=}"
+				;;
+
+      --extrap)
+        extrap="true"
+        ;;
+
+			--)
+				shift
+				break
+				;;
+
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}"
+				;;
+
+      *)
+        break
+        ;;
+
+			esac
+			shift
+
+	done
+
+  flag=false
+  [ -z "${input}" ] && echo "Need an input file with -i" 1>&2 && flag=true
+  [ -e "${input}" ] || (echo "Input file""'""$input""'"" does not exist" 1>&2 && flag=true)
+  [ -z "${output}" ] && echo "Need an output file with -o" 1>&2 && flag=true
+  [ -z "${Ti}" ] && echo "Need to define a lowest temperature with --Ti " 1>&2 && flag=true
+  [ -z "${Tf}" ] && echo "Need to define a highest temperature with --Tf " 1>&2 && flag=true
+  [ -z "${electronEnergyMin}" ] && echo "Need to define a lowest electron energy with --electron-energy-min " 1>&2 && flag=true
+  [ -z "${numExtrapE}" ] && echo "Need to define a number of extrapolation energies with --num-extrap-energies" 1>&2 && flag=true
+  [ -z "${nT}" ] && echo "Need to define a number of kinetic temperatures with --nT " 1>&2 && flag=true
+  [ -z "${inputXSUnits}" ] && echo "Need to define input cross section units with --input-xs-units" 1>&2 && flag=true
+  [ -z "${inputEUnits}" ] && echo "Need to define input electron energy units with --input-energy-unit" 1>&2 && flag=true
+  $flag && die "Variable(s) not defined. See above ^^^"
+
+  xsConversion="$(units 1 "$inputXSUnits" bohr)"
+  EConversion="$(units 1 "$inputEUnits" hartree)"
+
+  julia "$JPROGRAM" "$input" "$output" "$Ti" "$Tf" "$electronEnergyMin" "$numExtrapE" "$nT" "$logx" "$extrap" "$xsConversion" "$EConversion" "$comment"
+
+}
+
+main "$@"

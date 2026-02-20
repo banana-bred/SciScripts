@@ -1,0 +1,502 @@
+#!/bin/env zsh
+
+emulate -L zsh
+set -o pipefail
+
+################################################################################
+################################################################################
+# -- GLOBALS
+typeset -g PROGRAM="${0:t}"
+typeset -g QNR2KDIR="${HOME}/Workspace/ResearchCodes/QNR2K"
+typeset -g QNR2KEXE="${QNR2KDIR}"/bin/QNR2K_Big.x
+typeset -ga GEOMS
+  # UKRmol+ geometries array
+typeset -gi NGEOMS=0
+  # Number of geometries for the run
+typeset -gi GEOM_MIN=1 GEOM_MAX=0
+  # Min and max geometries for the run.
+  # I might allow this script to do segmented runs
+  # in which case this will be differen than just 1,NGEOMS
+typeset -gi GEOM_NDIGITS=0
+  # Number of digits with leading 0s used to represent the geometry indices
+typeset -gA _SWORD=( 1 singlet 2 doublet 3 triplet 4 quartet 5 quintet )
+  # S words (1 → singlet, ..)
+typeset -gA _IRREP_NUMBERS=(
+  A1 1 A2 2 B1 3 B2 4
+  Ap 1 App 2)
+  # Irrep name → number ( A1 → 1 )
+typeset -gi OPT1_DEFAULT=0 OPT2_DEFAULT=4 OPT3_DEFAULT=1
+  # Defaults for OPT{1,2,3} in SPIN_IRREP.init
+typeset -gi GROUND_STATE=1
+  # Ground state used as the 0 of the energy grid
+#################################################
+# -- optionals, can be used with interactive
+#################################################
+typeset -g ELO EHI ESTEP_SIZE
+typeset -gi ETYPE=1
+typeset -gi GROUND_STATE
+typeset -g DEGEN_STATES
+typeset -a OPTARGPAIRS
+# typeset -a OPTARGS
+# typeset -A OPTARGVALS
+################################################################################
+################################################################################
+
+_usage() {
+  cat <<HELP
+
+NAME
+
+  $PROGRAM
+
+USAGE
+
+  $PROGRAM [options] outputDir
+
+DESCRIPTION
+
+  Given a folder of templates to generate input files to run David's QNR2K code, create a directory
+  'outputDir' that will contain these templates. The default base directory of this script is $QNR2KDIR.
+  This can be changed with the -b,--basedir option. The base directory will be expected to have the
+  'Template' directory containing the files
+
+    GEOMS.dat  <------------------------- geometries to consider
+    SPIN_IRREP <------------------------- the script to run QNR2K for several geoms
+    SPIN_IRREP.init <-------------------- the init template for each spin and irrep
+                                          that QNR2K will read
+    Whitt_in_DER.dat <------------------- Whittaker derivatives
+    Whitt_in_FUN.dat <------------------- Whittaker functions
+    Whittaker_DER_forcereal_13b.dat <---- Real-valued Whittaker derivatives at 13 bohr
+    Whittaker_DER_forcereal_26b.dat <---- Real-valued Whittaker derivatives at 26 bohr
+    Whittaker_FUN_forcereal_13b.dat <---- Real-valued Whittaker functions   at 13 bohr
+    Whittaker_FUN_forcereal_26b.dat <---- Real-valued Whittaker functions   at 26 bohr
+
+  This script can also populate the templates with data from a UKRmol+ run if such an
+  output directory is supplied with the --fill flag; $PROGRAM will then expect to find the
+  'congregateFiles' script in the above-mentioned 'Template' directory.
+
+OPTIONS
+
+  [-s,--symlink]          symlink ukrmol stuff
+  [-f,--force]            force/overwrite
+  [--fill ukrmolDir]      try to fill the template based on UKRmol+ output in ukrmolDir
+  [-e,--existing]         don't touch outpuDir; assume it already has templates (use with --fill)
+  [-b,--basedir basedir]  use the directory BASE as the base directory for the QNR2K code
+  [-i,--interactive]      fill extra info (e.g., energy grid) interactively. This will ignore the
+                          options below like --ELO, --EHI, ..
+
+  --------------------- EXTRA OPTIONS ---------------------
+
+  [--ELO ElO]                  Lowest energy with respect to chosen target state in eV.
+  [--EHI EHI]                  Highest energy with respect to chosen target state in eV.
+  [--ET  ETYPE]                Type of energy grid (see ETYPE in mod_Egrid.f90 for more information).
+                               ETYPE=2: equidistant effective quantum number grid
+                                        ν / 1/sqrt(-2E)
+                               ETYPE=3: logarithmic energy grid, shifted by etarg(basetarg)
+                               ETYPE=else: linear equidistant grid
+  [--GS  GROUND_STATE]         Target state chosen as "0 of Egrid".
+  [--DS  DEGEN_STATES]         Array of the "true" value of electronic states, taking degeneracy into account.
+                               A Σ⁺, Π calculation will have three states 1, 2, 3 but it's really 1, 2 because
+                               of Π degeneracy. If passing in through CLI, please surround the elements
+                               with quotes, e.g, --DS "1 2 2".
+  [--DE  ESTEP_SIZE]           Energy step size in eV (for non-equidistant grids see mod_Egrid.f90).
+                               If ETYPE=3, then this is the number of energy points
+
+
+HELP
+}
+
+_die() {
+  print -u2
+  print -u2 -- "ERROR: $PROGRAM: $*"
+  print -u2
+  print -u2 "Run '$PROGRAM -h' for help"
+  exit 2
+}
+
+_addOpt() {
+  # Add the pair of values KEY=VALUE to the array OPTARGPAIRS
+  emulate -L zsh
+  local key="$1" val="$2"
+  [[ -z "$key" ]] && _die "No key given to _addOpt"
+  [[ -z "$val" ]] && _die "No val given to _addOpt for key $key"
+  # OPTARGS+=("$key")
+  # OPTARGVALS["$key"]="$val"
+  # OPTARGPAIRS+=("${key}"="${OPTARGVALS["$key"]}")
+  OPTARGPAIRS+=("$key"="$val")
+}
+
+_promptUserVarInput() {
+  # Put the user with QUESTION, input reply into the variable VAR
+  # _promptUserVarInput VAR QUESTION (DEFAULT)
+  emulate -L zsh
+  set -o nounset -o pipefail
+  local var="$1"         ; shift # name of global variable
+  local question="$1"    ; shift # user prompt
+  local default="${1:-}" ; [[ -n "$default" ]] && shift # default value if supplied, else blank
+  local reply
+  # -- if we have a default value
+  if [[ -n "$default" ]] ; then
+    read -r "?${question} [${default}]: " reply
+    # -- trim whitespace
+    reply="${reply##[[:space:]]#}"
+    reply="${reply%%[[:space:]]#}"
+    [[ "${reply:l}" == s || "${reply:l}" == skip ]] && return 0
+    [[ -z "$reply" ]] && { print -r -v "$var" -- "$default" ; return 0 }
+    print -r -v "$var" -- "$reply"
+    return 0
+  fi
+  # -- loop when we don't have a default to force user input or intentional skipping
+  while :; do
+    read -r "?${question}: " reply
+    # -- trim whitespace
+    reply="${reply##[[:space:]]#}"
+    reply="${reply%%[[:space:]]#}"
+    [[ "${reply:l}" == s || "${reply:l}" == skip ]] && return 0
+    [[ -n "$reply" ]] && break
+    print -u2 -- "Please enter a value, or (s)kip"
+  done
+  print -r -v "$var" -- "$reply"
+}
+
+_normalizeToCsv() {
+  # "1 2 3"  —→ 1,2,3
+  # "1,2, 3" —→ 1,2,3
+  emulate -L zsh
+  set -o nounset -o pipefail
+  local string="$1"
+  [[ -z "$string" ]] && {print "$string" ; return 0}
+  local -a vals cleaned
+  vals=( "${=${string//,/ }}" )
+  for val in "${vals[@]}" ; [[ -n "$val" ]] && cleaned+="$val"
+  print -r -- "${(j:,:)cleaned}"
+}
+
+_copyTemplates() {
+  ## Copy template files into output directory
+
+  emulate -L zsh
+
+  # -- options and defaults
+  local force="$1"
+  local symlink="$2"
+  local basedir="$3"
+
+  [[ -d "$basedir" ]] || _die "Base directory not found in _copyTemplates at $basedir"
+
+  # -- needed directories
+  local templateDir="$basedir"/Template
+  local binDir="$basedir"/bin
+
+  # -- check we have the right files/directories
+  [[ -d "$templateDir" ]] || _die "Could not find template directory at $templateDir"
+  [[ -d "$binDir" ]] || _die "Could not find bin directory at $binDir"
+
+  # -- create a clean outputDir
+  if (( force )) ; then
+    rm -rf "$outputDir"
+  else
+    rmdir "$outputDir" 2>/dev/null
+    [[ -d "$outputDir" ]] && _die "Directory $outputDir exists and is nonempty. Remove it, use a different directory, or retry with --force."
+  fi
+
+  # -- populate with template stuff
+  mkdir -p "$outputDir"/{input,output}
+  cp "$templateDir"/{GEOMS.dat,Whitt*.dat,SPIN_IRREP.init} "$outputDir"/input/.
+  cp "$templateDir"/SPIN_IRREP "$outputDir"/.
+
+}
+
+_fillGeoms() {
+  ## Fills the GEOMS.dat template
+  emulate -L zsh
+  local outputDir="$1"
+  local geomsFile="$2"
+  [[ -d "$outputDir" ]] || _die "cannot find the output directory at $outputDir"
+  [[ -e "$geomsFile" ]] || _die "cannot find the geometry template file at $geomsFile"
+  # -- read geometries
+  GEOMS=()
+  while IFS=" " read -r iR R _; do
+    # -- ignore blanks/comments
+    [[ -z "$iR" || "$iR" == \#* ]] && continue
+    # -- iR must be digits
+    [[ "$iR" == <-> ]] || continue
+    GEOMS+="$R"
+  done < "$geomsFile"
+  # GEOM_MIN="${GEOMS[1]}"
+  GEOM_MIN=1
+  GEOM_MAX="${#GEOMS}"
+  NGEOMS="$GEOM_MAX"
+  # -- get number of digits used in the filenames
+  local geomFiles=( "$outputDir"/Geometries/*.channel(N) )
+  GEOM_NDIGITS=( ${#${${geomFiles:t}%%_*}[1]} )
+}
+
+_fillTemplateItem() {
+  # fillTemplateItem "String with <<KEY1>> items to <<KEY2>>" KEY1=Template KEY2=replace
+  # → "String with Template items to replace"
+  emulate -L zsh
+  local string="$1" ; shift
+  local key val
+  local keyval
+  for keyval in "$@" ; do
+    # [[ ! "$keyval" == *=* ]] && _die "Must supply KEYs and VALs as KEY=VAL"
+    key="${keyval%%=*}"
+    val="${keyval#*=}"
+    string="${string//"<<$key>>"/$val}"
+  done
+  print -r -- "$string"
+}
+
+_fillTemplate() {
+  ## Takes in pairs of keys and values KEY=VALUE to replace instances of <<KEY>>
+  ## with VALUE in the file $1
+  emulate -L zsh
+  filename="${1}"
+  contents="$(<"$filename")"
+  [[ ! "$@" == *=* ]]   && _die "Must provide Key-Value pairs as KEY=VAL"
+  [[ -z "$filename" ]] && _die "The supplied filename for template replacement is empty"
+  [[ -e "$filename" ]] || _die "Cannot find the file $filename for template replacement"
+  [[ -z "$contents" ]] && _die "The contents of $filename are empty."
+  contents="$(_fillTemplateItem "$contents" "$@")"
+  # -- write to temp file, then replace (safer than rewriting file in-place)
+  local tmp="$(mktemp)"
+  print -r -- "$contents" > "$tmp"
+  mv "$tmp" "$filename"
+}
+
+main() {
+
+  emulate -L zsh
+  zmodload zsh/zutil
+
+  # -- parse options
+  local -a Help basedirOpt forceOpt fillOpt existingOpt interactiveOpt
+  local -a eloOpt ehiOpt estepSizeOpt etypeOpt groundStateOpt degenStatesOpt
+  zparseopts -E -D \
+    h=Help -help=Help \
+    s=symlinkOpt -symlink=symlinkOpt \
+    b:=basedirOpt -basedir:=basedirOpt \
+    f=forceOpt -force=forceOpt \
+    e=existingOpt -existing=existingOpt \
+    -fill:=fillOpt \
+    i=interactiveOpt -interactive=interactiveOpt \
+    -ELO:=eloOpt \
+    -EHI:=ehiOpt \
+    -DE:=estepSizeOpt \
+    -ET:=etypeOpt \
+    -GS:=groundStateOpt \
+    -DS:=degenStatesOpt
+
+  (( "${#Help}" )) && {_usage; return 0}
+
+  local outputDir="$1"
+  local basedir="$QNR2KDIR"
+  (( "${#outputDir}" )) || _die "Must provide an output directory"
+  (( ${#basedirOpt} )) && basedir="${basedirOpt[-1]}"
+
+  # -- flags
+  local force=0       ; (( ${#forceOpt} ))       && force=1
+  local symlink=0     ; (( ${#symlinkOpt} ))     && symlink=1
+  local existing=0    ; (( ${#existingOpt} ))    && existing=1
+  local fill=0        ; (( ${#fillOpt} ))        && fill=1
+  local interactive=0 ; (( ${#interactiveOpt} )) && interactive=1
+
+  # -- copy templates into outputDir unless we want to use the existing directory
+  (( existing )) || _copyTemplates "$force" "$symlink" "$basedir"
+
+  # -- procede with filling templates from UKRmol+ data ?
+  (( fill )) && local ukrmolDir="$fillOpt[-1]" || return 0
+
+  # -- check paths
+  [[ -d "$basedir" ]] || _die "The base directory supplied to _fillTemplates ($basedir) was not found"
+  local congregateFiles="$basedir"/bin/congregateFiles
+  [[ -x $congregateFiles ]] || _die "The congregateFiles script was not found/executable at $congregateFiles"
+  [[ -d "$outputDir" ]] || _die "The output directory $outputDir in _fillTemplates was not found"
+  outputDir="$(readlink -f "$outputDir")"
+
+  local -a congregate_cmd=("$congregateFiles")
+  (( force ))   && congregate_cmd+=("--force")
+  (( symlink )) && congregate_cmd+=("--symlink")
+  congregate_cmd+=("--" "$ukrmolDir" "${outputDir}/Geometries")
+
+  print
+  print "Congregating files ..."
+  print -r -- "—→ ${congregate_cmd[@]}"
+  print
+
+  "$congregate_cmd[@]"
+
+  # -- fill the geometries array
+  _fillGeoms "$outputDir" "$ukrmolDir"/geometries
+
+  # -- fill the GEOMS template
+  local geomTemplate="$outputDir/input/GEOMS.dat"
+  local headerTemplate rowTemplate
+  local geomsFile="$outputDir"/input/geomR.dat
+  IFS=" " read headerTemplate < "$geomTemplate"
+  IFS=" " read rowTemplate < <(tail -n 1 "$geomTemplate")
+  header="${headerTemplate//"<<NGEOM>>"/$NGEOMS}"
+  print -r -- "$header" > "$geomsFile"
+  typeset -i -Z "$GEOM_NDIGITS" iR=0
+  for R in $GEOMS ; do
+    ((iR++))
+    row="${rowTemplate//"<<I>>"/$iR}"
+    row="${row//"<<GEOM>>"/$R}"
+    print -r -- "$row" >> "$geomsFile"
+  done
+
+  # -- get the optional arguments if they're here
+  if (( interactive )) ; then
+    # -- prompt the user for inputs to extra options
+    _promptUserVarInput ETYPE \
+      "Please enter a value for ETYPE (leave blank for default).
+        ETYPE=1 → equidistant linear grid
+        ETYPE=2 → quantum defects ν = -/sqrt(-2E)
+        ETYPE=3 → logarithmic energy grid
+      ETYPE = " "$ETYPE"
+    _promptUserVarInput GROUND_STATE "Please enter a value for GROUND_STATE (leave blank for default)" "$GROUND_STATE"
+    _promptUserVarInput ELO "Please enter a value for ELO (eV)"
+    _promptUserVarInput EHI "Please enter a value for EHI (eV)"
+    _promptUserVarInput ESTEP_SIZE "Please enter a value for ESTEP_SIZE (eV)"
+    _promptUserVarInput DEGEN_STATES "Please enter the electronic state number accounting for their degeneracy, separated by commas or spaces, e.g.
+        ¹Σ⁺,³Π —→ DEGEN_STATES = 1 2 2 (Π doubly degenerate)
+        ³Σ⁻, ¹Δ, ³Π, ¹Σ⁺ —→ DEGEN_STATES = 1,2,2,3,3,4 (Δ and Π doubly degenerate)
+      **NOTE**: if performing calculations at multiple geometries, the order of the electronic states might change.
+      DEGEN_STATES = "
+    DEGEN_STATES="$(_normalizeToCsv "${DEGEN_STATES}")"
+    _addOpt ELO "$ELO"
+    _addOpt EHI "$EHI"
+    _addOpt ESTEP_SIZE "$ESTEP_SIZE"
+    _addOpt ETYPE "$ETYPE"
+    _addOpt GROUND_STATE "$GROUND_STATE"
+    _addOpt DEGEN_STATES "$DEGEN_STATES"
+  else
+    # -- fill if supplied by user
+    (( ${#eloOpt} ))         && ELO="${eloOpt[-1]}"                                     && _addOpt ELO "$ELO"
+    (( ${#ehiOpt} ))         && EHI="${ehiOpt[-1]}"                                     && _addOpt EHI "$EHI"
+    (( ${#estepSizeOpt} ))   && ESTEP_SIZE="${estepSizeOpt[-1]}"                        && _addOpt ESTEP_SIZE "$ESTEP_SIZE"
+    (( ${#etypeOpt} ))       && ETYPE="${etypeOpt[-1]}"                                 && _addOpt ETYPE "$ETYPE"
+    (( ${#groundStateOpt} )) && GROUND_STATE="${groundStateOpt[-1]}"                    && _addOpt GROUND_STATE "$GROUND_STATE"
+    (( ${#degenStatesOpt} )) && DEGEN_STATES="$(_normalizeToCsv "$degenStatesOpt[-1]")" && _addOpt DEGEN_STATES "$DEGEN_STATES"
+  fi
+
+  # -- fill the SPIN_IRREP script template
+  typeset -i -Z 4 istart="$GEOM_MIN"
+  local channelFiles=( "$outputDir"/Geometries/"${istart}"*.channel(N) )
+  local symmetries=( ${${${channelFiles:t}#*_}%%.*} ) # 1A1, 1A2, .., 3A1, 3A2 ..
+  for symm in $symmetries ; do
+
+    local spinmult=${symm%%[^0-9]*}
+    local irrep=${symm#$spinmult}
+    local sword="${_SWORD[$spinmult]}"
+
+    # -- given an irrep and spinmult, fill in the SPIN_IRREP template
+    local template="${outputDir}/SPIN_IRREP"
+    local filename="${outputDir}/${spinmult}${irrep}"
+    cp "$template" "$filename"
+    _fillTemplate "$filename" \
+      RUN_DIRECTORY="${outputDir}" \
+      QNR2K_EXE="${QNR2KEXE}" \
+      GEOM_START="${GEOM_MIN}" \
+      GEOM_END="${GEOM_MAX}"
+
+    # -- make sure it has the same permissions as the template
+    chmod --reference="$template" "$filename"
+
+    # -- fill the SPIN_IRREP.init template
+    local template="${outputDir}/input/SPIN_IRREP.init"
+    local filename="${outputDir}/input/${spinmult}${irrep}.init"
+
+    # -- determine the POINT_GROUP from UKRmol+ output
+    local mainLogFile="${ukrmolDir}/logs/main.log"
+    [[ -e "$mainLogFile" ]] || _die "The main.log file does not exist."
+    local point_group="$(awk '/^Symmetry / {print $2; exit}' "$mainLogFile")"
+
+    # -- determine the box size from UKRmol+ output
+    local rsolveOutFile="${ukrmolDir}/geom1/outputs/scattering.rsolve.${sword}.${irrep}.out"
+    [[ -e "$rsolveOutFile" ]] || _die "The output file for RSOLVE (${rsolveOutFile}) does not exist."
+    local rmatRadius="$(awk '/R-matrix radius/{print $NF; exit}' "${rsolveOutFile}")"
+    unset rsolveOutFile
+
+    # -- determine target charge
+    local swinterfOutFile="${ukrmolDir}/geom1/outputs/scattering.swinterf.${sword}.${irrep}.out"
+    [[ -e "$swinterfOutFile" ]] || _die "The output file for SWINTERF (${swinterfOutFile}) does not exist."
+    local targetCharge="$(awk '/Residual charge on system/{print $NF; exit}' "$swinterfOutFile")"
+    unset swinterfOutFile
+
+    # -- determine the channels and number of electronic states
+    local channelFile="${outputDir}"/Geometries/"${istart}_${spinmult}${irrep}".channel
+    # -- read channels file on separate file descriptor
+    exec {funit}<"$channelFile"
+    # -- skip 2 lines
+    for i in {1..2} ; {read -r _ <&$funit || _die "Failed in skipping first 2 lines of channel file $channelFile"}
+    # -- get numElecStates and numChans, skip numElecStates + 1 lines
+    local -i a b c d
+    local e=""
+    local -i numElecStates=0 numChans
+    read -r a b c d <&$funit || _die "Failed reading numElecStates and numChans in $channelFile"
+    numElecStates="$a"
+    numChans="$d"
+    for i in {1..$((numElecStates+1))} ; {read -r _<&$funit || _die "Failed in skipping the next $((numElecStates+1)) lines in $channelFile"}
+    # -- read the channels
+    local -a channelIndex=() nelec=() l=() λ=() eRyd=()
+    for i in {1..$numChans} ; do
+      read -r a b c d e <&$funit
+      channelIndex+=($a)
+      nelec+=($b)
+      l+=($c)
+      λ+=($d)
+      eRyd+=($e)
+    done
+    exec {funit}>&- # close funit
+
+    # -- fill the SPIN_IRREP.init template with non-channel info
+    local template="${outputDir}/input/SPIN_IRREP.init"
+    local filename="${outputDir}/input/${spinmult}${irrep}.init"
+    cp "$template" "$filename"
+    _fillTemplate "${filename}" \
+      UKRMOL_DIR="${outputDir}/Geometries/" \
+      POINT_GROUP="${point_group}" \
+      NDIGITS="$GEOM_NDIGITS" \
+      SPINMULT="$spinmult" \
+      IRREP="$_IRREP_NUMBERS[$irrep]" \
+      BOX_SIZE="$rmatRadius" \
+      Z="$targetCharge" \
+      NUMELEC="$numElecStates" \
+      NCHAN="$numChans" \
+      "${OPTARGPAIRS[@]}"   # <-- also fill in optional arguments here
+
+    # -- fill the SPIN_IRREP.init template with channel info
+    local channelTemplate="$(grep -F '<<ICHAN>>' "$filename" | head -n1)"
+    local channels="$(mktemp)"
+    exec {funit}>"$channels"
+    for ichan in {1..$numChans} ; do
+      local chi="$(printf '%4d' "${channelIndex[$ichan]}" )"
+      local chn="$(printf '%4d' "${nelec[$ichan]}" )"
+      local chl="$(printf '%4d' "${l[$ichan]}" )"
+      local chλ="$(printf '%4d' "${λ[$ichan]}" )"
+      local che="${eRyd[$ichan]}"
+      local args=( "$channelTemplate"
+        ICHAN="$chi"
+        OPT1="$OPT1_DEFAULT"
+        OPT2="$OPT2_DEFAULT"
+        OPT3="$OPT3_DEFAULT"
+        NELEC="$chn"
+        LORB="$chl"
+        LAMBDA="$chλ"
+        ERYD="  $che"
+      )
+      _fillTemplateItem "$channelTemplate" "${args[@]}" >&$funit
+    done
+    exec {funit}>&-
+    # -- replace template line with our channels of channels
+    sed -i '/<<ICHAN>>/ { r '"$channels"'
+    d
+    }' "$filename"
+  done
+
+
+}
+
+main "$@"

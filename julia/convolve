@@ -1,0 +1,151 @@
+#!/bin/sh
+
+PROGRAM="$(basename "$0")"
+JULIABIN="${0:h}"
+JPROGRAM="${JULIABIN}/convolve.jl"
+
+usage() {
+
+    cat <<help
+
+$PROGRAM
+
+    Wrapper for my julia script located at : "${JPROGRAM}"
+
+    usage: ${PROGRAM} [operation] [operand]
+
+    operations:               operand:        function:
+
+        -h                    none            show this message.
+        -i,--input            file            specify input  file
+        -o,--output           file            specify output file
+        --dx,--width          float           specify gaussian width
+        --nx                  integer         number of convolution x-grid points
+        --logx                none            if supplied, a logarithmic grid will be used.
+        -t, --ct, --convtype  (gauss|cauchy)  determines convolution function
+
+    The following is a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -i data_to_convolve.dat -o convolved_data.dat --dx=1.3e-3 --nx=1000 --logx
+
+help
+}
+
+die() {
+
+  exit_code=1
+  error_message="$1"
+
+  echo  1>&2
+	echo "${PROGRAM}: ${error_message}" 1>&2
+  echo  1>&2
+
+  usage
+
+  exit "${exit_code}"
+
+}
+
+lowercase() {
+  echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+main() {
+
+  logx="false"
+
+	while :; do
+		case $1 in
+			-h|-\?|--help)
+				usage
+				exit 0
+				;;
+
+			-i | --input)
+				[ "$2" ] && input="${2}" && shift || die 'ERROR: "--input" requires a non-empty option argument.'
+				;;
+			-i= | --input=)
+				die 'ERROR: "--input" requires a non-empty argument.'
+				;;
+			-i=?* | --input=?*)
+				input="${1#*=}"
+				;;
+
+			-o | --output)
+				[ "$2" ] && output="${2}" && shift || die 'ERROR: "--output" requires a non-empty option argument.'
+				;;
+			-o= | --output=)
+				die 'ERROR: "--output" requires a non-empty argument.'
+				;;
+			-o=?* | --output=?*)
+				output="${1#*=}"
+				;;
+
+			-t | --ct | --convtype)
+				[ "$2" ] && convtype="${2}" && shift || die 'ERROR: "--convtype" requires a non-empty option argument.'
+				;;
+			-t= | --ct | --convtype=)
+				die 'ERROR: "--convtype" requires a non-empty argument.'
+				;;
+			-t=?* | --ct=?* | --convtype=?*)
+				convtype="${1#*=}"
+				;;
+
+			--dx | --width)
+				[ "$2" ] && dx="${2}" && shift || die 'ERROR: "--dx" requires a non-empty option argument.'
+				;;
+			--dx= | --width=)
+				die 'ERROR: "--dx" requires a non-empty argument.'
+				;;
+			--dx=?* | --width=?*)
+				dx="${1#*=}"
+				;;
+
+			--nx)
+				[ "$2" ] && nx="${2}" && shift || die 'ERROR: "--nx" requires a non-empty option argument.'
+				;;
+			--nx=)
+				die 'ERROR: "--nx" requires a non-empty argument.'
+				;;
+			--nx=?*)
+				nx="${1#*=}"
+				;;
+
+      --logx)
+        logx="true"
+        ;;
+
+			--)
+				shift
+				break
+				;;
+
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}"
+				;;
+
+      *)
+        break
+        ;;
+
+			esac
+			shift
+
+	done
+
+  flag=false
+  [ -z "${input}" ] && echo "Need an input file" 1>&2 && flag=true
+  [ -e "${input}" ] || (echo "Input file""'""$input""'"" does not exist" 1>&2 && flag=true)
+  [ -z "${output}" ] && echo "Need an output file" 1>&2 && flag=true
+  [ -z "${dx}" ] && echo "Need to define dx " 1>&2 && flag=true
+  [ -z "${nx}" ] && echo "Need to define nx " 1>&2 && flag=true
+  [ -z "${convtype}" ] && echo "Need to define a convolution type " 1>&2 && flag=true
+  $flag && die "Variable(s) not defined. See above ^^^"
+
+  convtype="$(lowercase $convtype)"
+
+  julia "$JPROGRAM" "$input" "$output" "$dx" "$nx" "$logx" "$convtype"
+
+}
+
+main "$@"

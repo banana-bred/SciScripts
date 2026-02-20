@@ -1,0 +1,189 @@
+#!/bin/zsh
+
+PROGRAM="$(basename "$0")"
+JULIABIN="${0:h}"
+JPROGRAM="${JULIABIN}/${PROGRAM}.jl"
+
+usage() {
+
+    cat <<help
+
+$PROGRAM
+
+    Wrapper for my julia script $PROGRAM (${JPROGRAM}), interpolates data using B-splines.
+
+    usage: ${PROGRAM} [operation] [operand]
+
+    operations:               operand:   function:
+
+        -h                    none       show this message.
+        -i,--input            file       specify input  file
+        -o,--output           file       specify output file
+        -kx                   integer    the order of the interpolating splines
+        -xi                   number     the smallest value of the interoplant grid
+        -xf                   number     the largest value of the interoplant grid
+        -nx                   integer    the number of points in the interpolant grid
+        --logx                none       if provided, use a logarithmic interpolant grid. Otherwise, use a
+                                         uniform interpolant grid.
+        --comment_char        string     the comment character (default '#'). This must be a single character.
+
+    The following would be a valid implementation of ${PROGRAM} :
+
+        ${PROGRAM} -i X_AND_Y_DATA.dat -o INTERPOLATED_DATA.dat \\
+                  -kx 3 -xi 1 -xf 5.5 -nx 1000 --comment_char "#"
+
+    Input file: a file structured like so
+
+       x   y
+       .   .
+       .   .
+       .   .
+
+    There can be several y-columns.
+
+    Output file: interpolated results in the same format
+
+help
+}
+
+die() {
+
+  exit_code=1
+  error_message="$1"
+
+  echo  1>&2
+	echo "${PROGRAM}: ${error_message}" 1>&2
+  echo  1>&2
+
+  usage
+
+  exit "${exit_code}"
+
+}
+
+main() {
+
+  kx=""
+  xi=""
+  xf=""
+  nx=""
+  logx=false
+  comment_char="#"
+
+	while :; do
+		case $1 in
+
+			-h|-\?|--help)
+				usage
+				exit 0
+				;;
+
+			-i | --input)
+				[ "$2" ] && input="${2}" && shift || die 'ERROR: "--input" requires a non-empty option argument.'
+				;;
+			-i= | --input=)
+				die 'ERROR: "--input" requires a non-empty argument.'
+				;;
+			-i=?* | --input=?*)
+				input="${1#*=}"
+				;;
+
+			-o | --output)
+				[ "$2" ] && output="${2}" && shift || die 'ERROR: "--output" requires a non-empty option argument.'
+				;;
+			-o= | --output=)
+				die 'ERROR: "--output" requires a non-empty argument.'
+				;;
+			-o=?* | --output=?*)
+				output="${1#*=}"
+				;;
+
+			-nx)
+				[ "$2" ] && nx="${2}" && shift || die 'ERROR: "-nx" requires a non-empty option argument.'
+				;;
+			-nx=)
+				die 'ERROR: "-nx" requires a non-empty argument.'
+				;;
+			-nx=?*)
+				nx="${1#*=}"
+				;;
+
+			-kx)
+				[ "$2" ] && kx="${2}" && shift || die 'ERROR: "-kx" requires a non-empty option argument.'
+				;;
+			-kx=)
+				die 'ERROR: "-kx" requires a non-empty argument.'
+				;;
+			-kx=?*)
+				kx="${1#*=}"
+				;;
+
+			-xi)
+				[ "$2" ] && xi="${2}" && shift || die 'ERROR: "-xi" requires a non-empty option argument.'
+				;;
+			-xi=)
+				die 'ERROR: "-xi" requires a non-empty argument.'
+				;;
+			-xi=?*)
+				xi="${1#*=}"
+        ;;
+
+			-xf)
+				[ "$2" ] && xf="${2}" && shift || die 'ERROR: "-xf" requires a non-empty option argument.'
+				;;
+			-xf=)
+				die 'ERROR: "-xf" requires a non-empty argument.'
+				;;
+			-xf=?*)
+				xf="${1#*=}"
+				;;
+
+			--comment_char)
+				[ "$2" ] && comment_char="${2}" && shift || die 'ERROR: "--comment_char" requires a non-empty option argument.'
+				;;
+			--comment_char=)
+				die 'ERROR: "--comment_char" requires a non-empty argument.'
+				;;
+			--comment_char=?*)
+				comment_char="${1#*=}"
+				;;
+
+			--logx)
+        logx=true
+				;;
+
+			--)
+				shift
+				break
+				;;
+
+			-?*)
+				printf 'WARN: Unknown option (ignored): %s\n' "${1}"
+				;;
+
+      *)
+        break
+        ;;
+
+			esac
+			shift
+
+	done
+
+  flag=false
+  [ -z "${input}" ] && echo "Need an input file with -i" 1>&2 && flag=true
+  [ -e "${input}" ] || (echo "Input file""'""$input""'"" does not exist" 1>&2 && flag=true)
+  [ -z "${output}" ] && echo "Need an output file with -o" 1>&2 && flag=true
+  [ -z "$kx" ] && echo "Need to define a spline order with -kx" 1>&2 && flag=true
+  [ -z "$nx" ] && echo "Need to define grid size with -nx" 1>&2 && flag=true
+  [ -z "$xi" ] && echo "Need to define grid minimum with -xi" 1>&2 && flag=true
+  [ -z "$xf" ] && echo "Need to define grid maximum with -xi" 1>&2 && flag=true
+  $flag && die "Variable(s) not defined. See above ^^^"
+
+  # -- get mulitiplicative constants to convert data to the expected units
+
+  julia "$JPROGRAM" "$input" "$output" "$kx" "$xi" "$xf" "$nx" "$logx" "$comment_char"
+
+}
+
+main "$@"
