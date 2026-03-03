@@ -35,7 +35,7 @@ typeset -gi GROUND_STATE=1
 typeset -g ELO EHI ESTEP_SIZE
 typeset -gi ETYPE=1
 typeset -gi GROUND_STATE
-typeset -g DEGEN_STATES
+# typeset -g DEGEN_STATES
 typeset -a OPTARGPAIRS
 # typeset -a OPTARGS
 # typeset -A OPTARGVALS
@@ -72,8 +72,7 @@ DESCRIPTION
     Whittaker_FUN_forcereal_26b.dat <---- Real-valued Whittaker functions   at 26 bohr
 
   This script can also populate the templates with data from a UKRmol+ run if such an
-  output directory is supplied with the --fill flag; $PROGRAM will then expect to find the
-  'congregateFiles' script in the above-mentioned 'Template' directory.
+  output directory is supplied with the --fill flag
 
 OPTIONS
 
@@ -87,6 +86,7 @@ OPTIONS
 
   --------------------- EXTRA OPTIONS ---------------------
 
+  [--RP  RPROP]                R-matrix propagation distance
   [--ELO ElO]                  Lowest energy with respect to chosen target state in eV.
   [--EHI EHI]                  Highest energy with respect to chosen target state in eV.
   [--ET  ETYPE]                Type of energy grid (see ETYPE in mod_Egrid.f90 for more information).
@@ -95,15 +95,15 @@ OPTIONS
                                ETYPE=3: logarithmic energy grid, shifted by etarg(basetarg)
                                ETYPE=else: linear equidistant grid
   [--GS  GROUND_STATE]         Target state chosen as "0 of Egrid".
-  [--DS  DEGEN_STATES]         Array of the "true" value of electronic states, taking degeneracy into account.
-                               A Σ⁺, Π calculation will have three states 1, 2, 3 but it's really 1, 2 because
-                               of Π degeneracy. If passing in through CLI, please surround the elements
-                               with quotes, e.g, --DS "1 2 2".
   [--DE  ESTEP_SIZE]           Energy step size in eV (for non-equidistant grids see mod_Egrid.f90).
                                If ETYPE=3, then this is the number of energy points
 
 
 HELP
+  # [--DS  DEGEN_STATES]         Array of the "true" value of electronic states, taking degeneracy into account.
+  #                              A Σ⁺, Π calculation will have three states 1, 2, 3 but it's really 1, 2 because
+  #                              of Π degeneracy. If passing in through CLI, please surround the elements
+  #                              with quotes, e.g, --DS "1 2 2".
 }
 
 _die() {
@@ -272,7 +272,7 @@ main() {
 
   # -- parse options
   local -a Help basedirOpt forceOpt fillOpt existingOpt interactiveOpt
-  local -a eloOpt ehiOpt estepSizeOpt etypeOpt groundStateOpt degenStatesOpt
+  local -a eloOpt ehiOpt estepSizeOpt etypeOpt groundStateOpt degenStatesOpt rpropOpt
   zparseopts -E -D \
     h=Help -help=Help \
     s=symlinkOpt -symlink=symlinkOpt \
@@ -281,6 +281,7 @@ main() {
     e=existingOpt -existing=existingOpt \
     -fill:=fillOpt \
     i=interactiveOpt -interactive=interactiveOpt \
+    -RP:=rpropOpt \
     -ELO:=eloOpt \
     -EHI:=ehiOpt \
     -DE:=estepSizeOpt \
@@ -310,25 +311,34 @@ main() {
 
   # -- check paths
   [[ -d "$basedir" ]] || _die "The base directory supplied to _fillTemplates ($basedir) was not found"
-  local congregateFiles="$basedir"/bin/congregateFiles
-  [[ -x $congregateFiles ]] || _die "The congregateFiles script was not found/executable at $congregateFiles"
+  # local congregateFiles="$(command -v congregateFiles)"
+  # [[ -x $congregateFiles ]] || _die "The congregateFiles script was not found/executable at $congregateFiles"
   [[ -d "$outputDir" ]] || _die "The output directory $outputDir in _fillTemplates was not found"
   outputDir="$(readlink -f "$outputDir")"
 
-  local -a congregate_cmd=("$congregateFiles")
-  (( force ))   && congregate_cmd+=("--force")
-  (( symlink )) && congregate_cmd+=("--symlink")
-  congregate_cmd+=("--" "$ukrmolDir" "${outputDir}/Geometries")
+  # local -a congregate_cmd=("$congregateFiles")
+  # (( force ))   && congregate_cmd+=("--force")
+  # (( symlink )) && congregate_cmd+=("--symlink")
+  # congregate_cmd+=("--" "$ukrmolDir"/collected_scattering_data "${outputDir}/collected_scattering_data")
+
+  # print
+  # print "Congregating files ..."
+  # print -r -- "—→ ${congregate_cmd[@]}"
+  # print
+
+  # "$congregate_cmd[@]"
 
   print
-  print "Congregating files ..."
-  print -r -- "—→ ${congregate_cmd[@]}"
+  print "Copying/linking scattering data ..."
   print
+  dest="$outputDir/collected_scattering_data"
+  from="$ukrmolDir"/collected_scattering_data
+  (( symlink )) && cmd=(ln -s) || cmd=(cp -r)
+  (( force )) && cmd+=(-f)
+  "${cmd[@]}" -- "$from" "$dest"
 
-  "$congregate_cmd[@]"
-
-  # -- fill the geometries array
-  _fillGeoms "$outputDir" "$ukrmolDir"/geometries
+  # -- fill the GEOMS array
+  _fillGeoms "$outputDir" "$ukrmolDir/geometries"
 
   # -- fill the GEOMS template
   local geomTemplate="$outputDir/input/GEOMS.dat"
@@ -359,18 +369,19 @@ main() {
     _promptUserVarInput ELO "Please enter a value for ELO (eV)"
     _promptUserVarInput EHI "Please enter a value for EHI (eV)"
     _promptUserVarInput ESTEP_SIZE "Please enter a value for ESTEP_SIZE (eV)"
-    _promptUserVarInput DEGEN_STATES "Please enter the electronic state number accounting for their degeneracy, separated by commas or spaces, e.g.
-        ¹Σ⁺,³Π —→ DEGEN_STATES = 1 2 2 (Π doubly degenerate)
-        ³Σ⁻, ¹Δ, ³Π, ¹Σ⁺ —→ DEGEN_STATES = 1,2,2,3,3,4 (Δ and Π doubly degenerate)
-      **NOTE**: if performing calculations at multiple geometries, the order of the electronic states might change.
-      DEGEN_STATES = "
-    DEGEN_STATES="$(_normalizeToCsv "${DEGEN_STATES}")"
+    # _promptUserVarInput DEGEN_STATES "Please enter the electronic state number accounting for their degeneracy, separated by commas or spaces, e.g.
+    #     ¹Σ⁺,³Π —→ DEGEN_STATES = 1 2 2 (Π doubly degenerate)
+    #     ³Σ⁻, ¹Δ, ³Π, ¹Σ⁺ —→ DEGEN_STATES = 1,2,2,3,3,4 (Δ and Π doubly degenerate)
+    #   **NOTE**: if performing calculations at multiple geometries, the order of the electronic states might change.
+    #   DEGEN_STATES = "
+    # DEGEN_STATES="$(_normalizeToCsv "${DEGEN_STATES}")"
     _addOpt ELO "$ELO"
     _addOpt EHI "$EHI"
     _addOpt ESTEP_SIZE "$ESTEP_SIZE"
     _addOpt ETYPE "$ETYPE"
     _addOpt GROUND_STATE "$GROUND_STATE"
-    _addOpt DEGEN_STATES "$DEGEN_STATES"
+    # _addOpt DEGEN_STATES "$DEGEN_STATES"
+    _addOpt RPROP "$RPROP"
   else
     # -- fill if supplied by user
     (( ${#eloOpt} ))         && ELO="${eloOpt[-1]}"                                     && _addOpt ELO "$ELO"
@@ -378,13 +389,14 @@ main() {
     (( ${#estepSizeOpt} ))   && ESTEP_SIZE="${estepSizeOpt[-1]}"                        && _addOpt ESTEP_SIZE "$ESTEP_SIZE"
     (( ${#etypeOpt} ))       && ETYPE="${etypeOpt[-1]}"                                 && _addOpt ETYPE "$ETYPE"
     (( ${#groundStateOpt} )) && GROUND_STATE="${groundStateOpt[-1]}"                    && _addOpt GROUND_STATE "$GROUND_STATE"
-    (( ${#degenStatesOpt} )) && DEGEN_STATES="$(_normalizeToCsv "$degenStatesOpt[-1]")" && _addOpt DEGEN_STATES "$DEGEN_STATES"
+    # (( ${#degenStatesOpt} )) && DEGEN_STATES="$(_normalizeToCsv "$degenStatesOpt[-1]")" && _addOpt DEGEN_STATES "$DEGEN_STATES"
+    (( ${#rpropOpt} ))       && RPROP="${rpropOpt[-1]}"                                 && _addOpt RPROP "$RPROP"
   fi
 
   # -- fill the SPIN_IRREP script template
-  typeset -i -Z 4 istart="$GEOM_MIN"
-  local channelFiles=( "$outputDir"/Geometries/"${istart}"*.channel(N) )
-  local symmetries=( ${${${channelFiles:t}#*_}%%.*} ) # 1A1, 1A2, .., 3A1, 3A2 ..
+  typeset -i istart="$GEOM_MIN"
+  local channelFiles=( "$outputDir"/collected_scattering_data/channels/channels.geom"${istart}"*(N) )
+  local symmetries=( ${channelFiles#*.geom1.} ) # 1A1, 1A2, .., 3A1, 3A2 ..
   for symm in $symmetries ; do
 
     local spinmult=${symm%%[^0-9]*}
@@ -414,19 +426,21 @@ main() {
     local point_group="$(awk '/^Symmetry / {print $2; exit}' "$mainLogFile")"
 
     # -- determine the box size from UKRmol+ output
-    local rsolveOutFile="${ukrmolDir}/geom1/outputs/scattering.rsolve.${sword}.${irrep}.out"
+    # local rsolveOutFile="${ukrmolDir}/geom1/outputs/scattering.rsolve.${sword}.${irrep}.out"
+    local rsolveOutFile="${ukrmolDir}/geom"${istart}"/outputs/scattering.rsolve.${irrep}.out"
     [[ -e "$rsolveOutFile" ]] || _die "The output file for RSOLVE (${rsolveOutFile}) does not exist."
     local rmatRadius="$(awk '/R-matrix radius/{print $NF; exit}' "${rsolveOutFile}")"
     unset rsolveOutFile
 
     # -- determine target charge
-    local swinterfOutFile="${ukrmolDir}/geom1/outputs/scattering.swinterf.${sword}.${irrep}.out"
+    local swinterfOutFile="${ukrmolDir}/geom"${istart}"/outputs/scattering.swinterf.${irrep}.out"
+    # local swinterfOutFile="${ukrmolDir}/geom1/outputs/scattering.swinterf.${sword}.${irrep}.out"
     [[ -e "$swinterfOutFile" ]] || _die "The output file for SWINTERF (${swinterfOutFile}) does not exist."
     local targetCharge="$(awk '/Residual charge on system/{print $NF; exit}' "$swinterfOutFile")"
     unset swinterfOutFile
 
     # -- determine the channels and number of electronic states
-    local channelFile="${outputDir}"/Geometries/"${istart}_${spinmult}${irrep}".channel
+    local channelFile="${outputDir}"/collected_scattering_data/channels/channels.geom"${istart}"."${irrep}"
     # -- read channels file on separate file descriptor
     exec {funit}<"$channelFile"
     # -- skip 2 lines
@@ -451,21 +465,29 @@ main() {
     done
     exec {funit}>&- # close funit
 
+
+    # -- RPROP is expected to be a real; append .0 if integer
+    setopt localoptions extendedglob
+    [[ $RPROP == ([-+])#<-> ]] && RPROP="${RPROP}.0"
+
     # -- fill the SPIN_IRREP.init template with non-channel info
     local template="${outputDir}/input/SPIN_IRREP.init"
     local filename="${outputDir}/input/${spinmult}${irrep}.init"
     cp "$template" "$filename"
     _fillTemplate "${filename}" \
-      UKRMOL_DIR="${outputDir}/Geometries/" \
-      POINT_GROUP="${point_group}" \
+      UKRMOL_DIR="${outputDir}/" \
       NDIGITS="$GEOM_NDIGITS" \
-      SPINMULT="$spinmult" \
-      IRREP="$_IRREP_NUMBERS[$irrep]" \
+      SPINMULT="${_SWORD[$spinmult]}" \
+      IRREP="$irrep" \
       BOX_SIZE="$rmatRadius" \
+      RPROP="$RPROP" \
       Z="$targetCharge" \
       NUMELEC="$numElecStates" \
+      POINT_GROUP="${point_group}" \
       NCHAN="$numChans" \
       "${OPTARGPAIRS[@]}"   # <-- also fill in optional arguments here
+      # SPINMULT="$spinmult" \
+      # IRREP="$_IRREP_NUMBERS[$irrep]" \
 
     # -- fill the SPIN_IRREP.init template with channel info
     local channelTemplate="$(grep -F '<<ICHAN>>' "$filename" | head -n1)"

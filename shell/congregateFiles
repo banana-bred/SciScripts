@@ -1,0 +1,139 @@
+#!/bin/env zsh
+#compdef congregateFiles
+function _congregateFiles() {
+  _arguments -s \
+    '(-h --help)'{-h,--help}'[show this help message]' \
+    '(-f --force)'{-f,--forced}'[overwrite existing directories automatically]'
+    '(-s --symlink)'{-s,--symlink}'[create symlinks instead of copies]'
+}
+
+emulate -L zsh
+set -o pipefail
+
+typeset -g PROGRAM="${0:t}" # basename
+
+die() {
+  print -u2
+  print -u2 -- "ERROR: $PROGRAM: $*"
+  print -u2
+  print -u2 "Run '$PROGRAM -h' for help"
+  exit 2
+}
+
+usage() {
+
+  cat <<help
+
+  ${PROGRAM}
+
+    Transform UKRmol+ R-matrix and channel file output -> David's input format.
+    Files will be copied from UKRmol+ directory, although in principle symlinking
+    could work.
+
+  usage: ${PROGRAM} [options] input_directory [output_directory]
+
+    [options]
+    -h, --help     show this messgae
+    -f, --force    overwrite existing directories automatically
+    -s, --symlink  create symlinks instead of copies
+
+    Supply one input_directory (relative path, absolute path, or symlink) with the following structure:
+
+      input_directory/
+            |-> collected_scattering_data/
+                           |------------> channels/
+                           |                  |---> channels.geomX.SPIN.IRREP
+                           |------------> rmat_amplitudes/
+                           |                  |---> ramps.geomX.SPIN.IRREP
+
+
+    The optional output_directory can be supplied to specify where ${PROGRAM} will creat copies/links.
+    By default, this will have the same basename as input_directory with an appended ".matricesOnly".
+
+help
+
+}
+
+main() {
+
+  zmodload zsh/zutil
+
+  # -- parse options
+  local -a Help forceOpt # <-- indexed options arrays
+  local force=false
+  local symlinks=false
+  zparseopts -D \
+    h=Help -help=Help \
+    f:=forceOpt -force:=forceOpt \
+    s:=symlinkOpt -symlink:=symlinkOpt
+
+  (( "${#Help}" ))     && {usage; return 0}
+  (( "${#forceOpt}" )) && force=true
+
+  local parent="$1"
+  [[ -z "${parent}" ]] && die "Please specify a parent directory containing geom directories from UKRmol+"
+  parent="$(readlink -f "$parent")"
+  [[ -d "${parent}" ]] || die "The UKRmol+ directory at $parent does not exist or is not a directory"
+
+  # -- copy and mkdir command
+  (( "${#symlinkOpt}" )) && COPY_CMD="ln -s" || COPY_CMD=cp
+  (( "${#symlinkOpt}" )) && MKDIR_CMD="ln -s" || MKDIR_CMD="mkdir -p"
+
+  # -- supported spin multiplicities
+  local singlet=1
+  local doublet=2
+  local triplet=3
+  local quartet=4
+
+  # -- check if we have a scattering data foler
+  scatteringData="${parent}"/collected_scattering_data
+  [[ -z "${scatteringData}" ]] && die "The provided folder does not contain the expected directory 'collected_scattering_data'"
+
+  # -- matrices in current working directory by default
+  local matricesOnly="${parent:t}.matricesOnly"
+  [[ -z "$2" ]] || matricesOnly="$2"
+
+  if [[ "${force}" == "true" ]] ; then
+    rm -rf "$matricesOnly"
+  else
+    rmdir "$matricesOnly" 2>/dev/null
+    [[ -d "$matricesOnly" ]] && die "Directory "${matricesOnly}" already exists and is nonempty. Delete it or retry with force"
+  fi
+
+  eval "$MKDIR_CMD $matricesOnly"
+
+  for fileType in channels rmat_amplitudes ; do
+
+    case "${fileType}" in
+      channels)        ext=channel ;;
+      rmat_amplitudes) ext=rmat    ;;
+      *) die "unknown filetype"    ;;
+    esac
+
+    for file in "${scatteringData}/${fileType}"/* ; do
+
+      [[ -r "$file" ]] || die "Cannot read file located at $file"
+
+      base="${file:t}"
+
+      read -r geom spin symm <<<"$( echo "$base" | awk -F "." '{print $2, $3, $4}')"
+      case "$spin" in
+        singlet) spinNumber="$singlet" ;;
+        doublet) spinNumber="$doublet" ;;
+        triplet) spinNumber="$triplet" ;;
+        quartet) spinNumber="$quartet" ;;
+      esac
+
+      geomNumber="$(echo "$geom" | grep -E -o '[0-9]*' | awk '{printf "%04d", $1}')"
+
+      fileTo="${matricesOnly}/${geomNumber}_${spinNumber}${symm}.${ext}"
+
+      eval "$COPY_CMD" "${file}" "${fileTo}"
+
+    done
+
+  done
+
+}
+
+main "$@"
