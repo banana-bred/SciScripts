@@ -390,7 +390,7 @@ main() {
     (( ${#etypeOpt} ))       && ETYPE="${etypeOpt[-1]}"                                 && _addOpt ETYPE "$ETYPE"
     (( ${#groundStateOpt} )) && GROUND_STATE="${groundStateOpt[-1]}"                    && _addOpt GROUND_STATE "$GROUND_STATE"
     # (( ${#degenStatesOpt} )) && DEGEN_STATES="$(_normalizeToCsv "$degenStatesOpt[-1]")" && _addOpt DEGEN_STATES "$DEGEN_STATES"
-    (( ${#rpropOpt} ))       && RPROP="${rpropOpt[-1]}"                                 && _addOpt RPROP "$RPROP"
+    (( ${#rpropOpt} ))       && RPROP="${rpropOpt[-1]}"                                 && _addOpt RPROP "$RPROP" || RPROP=0
     (( ${#rpropOpt} ))       && DO_RPROP=1 || DO_RPROP=0
   fi
 
