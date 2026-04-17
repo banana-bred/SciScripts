@@ -12,7 +12,8 @@ NDISP = 81
 QMAX = 2 # -- max mode displacement in each direction
 NMODES = 3
 CENTER = "charge" # -- charge, mass, none
-METHOD = "scf"
+METHOD_MODES = "ccsd(t)"
+METHOD_ENERGY = "ccsd(t)"
 BASIS = "cc-pvtz"
 REFERENCE = "uhf"
 LABEL = "H2OX"
@@ -100,7 +101,12 @@ def recenter_to_zero_dipole(geom_bohr, mol_template):
   m.update_geometry()
 
   # -- single SCF calculation to get dipole
-  E, w = psi4.energy(METHOD, molecule=m, return_wfn=True)
+  E, w = psi4.energy(METHOD_ENERGY, molecule=m, return_wfn=True)
+
+###############
+  mu = get_dipole_au(w)  # ea0
+  psi4.core.print_out(
+      f"   mu (ea0) = [{mu[0]: .8f}, {mu[1]: .8f}, {mu[2]: .8f}]  |mu|={np.linalg.norm(mu):.8f}\n"
 
 ###############
   mu = get_dipole_au(w)  # ea0
@@ -138,7 +144,7 @@ def energy_on_geom(geom_bohr, mol_template):
   m = mol_template.clone()
   m.set_geometry(psi4.core.Matrix.from_array(geom_bohr))
   m.update_geometry()
-  E = psi4.energy(METHOD, molecule=m)
+  E = psi4.energy(METHOD_ENERGY, molecule=m)
   return float(E)
 
 def convert_energy(dE_hartree, unit):
@@ -155,8 +161,8 @@ def convert_energy(dE_hartree, unit):
 # ------------------------------------------
 
 # -- optimize then harmonic frequencies
-optimize(METHOD)
-E0, wfn0 = frequency(METHOD, return_wfn=True)
+psi4.optimize(METHOD_MODES)
+E0, wfn0 = psi4.frequency(METHOD_MODES, return_wfn=True)
 
 mol0  = wfn0.molecule()
 
@@ -227,10 +233,11 @@ for imode, midx in enumerate(vib_idx, start=1):
 
     _, unit_label = convert_energy(0.0, EUNIT)
     fv.write(f"\# mode {imode:02d}\n")
-    fv.write(f"\# ω₀ = {omega[midx]:.6f} cm^-1\n")
-    fv.write(f"\# Q   V({unit_label})\n")
+    fv.write(f"\# ω₀ = {omega[midx]:.6f} (cm^-1)\n")
+    fv.write(f"\# {"Q":6s} V({unit_label})\n")
 
     for Q in Qvals:
+      print(f"Q: {Q}")
       geom = geom0 + (Q*amp0) * mode_vec
 
       μ = None
