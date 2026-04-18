@@ -9,8 +9,8 @@ set_num_threads(8)
 ########################################################
 # -- defaults
 NDISP = 81
-QMAX = 2 # -- max mode displacement in each direction
-NMODES = 3
+QMAX = 2 # -- max mode displacement in each direction. Q=±1 are the classical turning points for ν=0
+NMODES = None
 CENTER = "charge" # -- charge, mass, none
 METHOD_MODES = "ccsd(t)"
 METHOD_ENERGY = "ccsd(t)"
@@ -45,6 +45,7 @@ molecule H2OX {
   no_com
   no_reorient
   symmetry Cs
+  # symmetry C2v
 }
 
 psi4.set_options({
@@ -102,11 +103,6 @@ def recenter_to_zero_dipole(geom_bohr, mol_template):
 
   # -- single SCF calculation to get dipole
   E, w = psi4.energy(METHOD_ENERGY, molecule=m, return_wfn=True)
-
-###############
-  mu = get_dipole_au(w)  # ea0
-  psi4.core.print_out(
-      f"   mu (ea0) = [{mu[0]: .8f}, {mu[1]: .8f}, {mu[2]: .8f}]  |mu|={np.linalg.norm(mu):.8f}\n"
 
 ###############
   mu = get_dipole_au(w)  # ea0
@@ -177,10 +173,28 @@ psi4.core.print_out(f"<S^2> = {s2}, exact = {S2_exact}\n")
 # ------------------------------------------
 # Get normal mode info
 # ------------------------------------------
+pg       = mol0.point_group().symbol().lower()
+fa       = wfn0.frequency_analysis
+omega_c  = fa["omega"].data # complex cm⁻¹
+omega    = vibmod.filter_omega_to_real(omega_c) # real cm⁻¹
+fa       = wfn0.frequency_analysis
+TRV      = np.array(fa["TRV"].data)
+Γ        = np.array(fa["gamma"].data)
+ts_irrep = mol0.irrep_labels()[0]
 
-fa     = wfn0.frequency_analysis
-omega_c = fa["omega"].data # complex cm⁻¹
-omega  = vibmod.filter_omega_to_real(omega_c) # real cm⁻¹
+if pg.startswith("cs"):
+  vib_idx= np.where(TRV == "V")[0]
+elif pg.startswith("c2v"):
+  vib_idx= np.where((TRV == "V") & (Γ == ts_irrep))[0]
+else:
+  raise Exception(f"Unsupported symmetry for mode filtering: {pg}")
+
+# -- sort modes by frequency
+vib_idx = vib_idx[np.argsort(omega[vib_idx])]
+if vib_idx.size == 0:
+  raise Exception ("No vibrational modes found (TRV == 'V')")
+elif NMODES is not None and vib_idx.size != NMODES:
+  raise Exception(f"\nFound {vib_idx.size} modes when there should only be {NMODES}")
 
 TRV    = np.array(fa["TRV"].data)                  # labels 'T','R','V'
 x      = np.array(fa["x"].data)                    # unweighted normal modes, (a₀) (nDOF×nDOF)
@@ -191,16 +205,6 @@ geom0 = np.array(mol0.geometry())             # Equilibrium a₀
 symbols = [mol0.symbol(i) for i in range(natoms)]
 M = np.array([mol0.mass(i) for i in range(natoms)], dtype=float)
 bohr2ang = psi4.constants.bohr2angstroms
-
-# -- determine vibrational mode indices
-vib_idx = np.where(TRV == "V")[0]
-if vib_idx.size == 0:
-  raise Exception ("No vibrational modes found (TRV == 'V')")
-elif vib_idx.size != NMODES:
-  raise Exception(f"\nFound {vib_idx.size} modes when there should only be {NMODES}")
-
-# -- sort modes by frequency
-vib_idx = vib_idx[np.argsort(omega[vib_idx])]
 
 # -- Q-grid (normal mode)
 if NDISP < 1:
@@ -214,6 +218,7 @@ psi4.core.print_out(f"Vibrational mode indices (energy sorted): {list(map(int, v
 
 # -- final loop over modes
 for imode, midx in enumerate(vib_idx, start=1):
+  print(f"Mode: {imode:02d}")
   mode_vec = x[:, midx].reshape((natoms, 3))
   amp0 = float(Xtp0[midx]) # turning point for q=1
 
