@@ -1,4 +1,15 @@
-#!/usr/bin/env -S awk -f
+#!/usr/bin/env zsh
+
+
+# This is actually a zsh script.; don't tell anyone. I guess it depends on
+# how you want to interpret which kind of "script" this is. It is definitely
+# an awk script if you ignore the shebang and the next lines
+
+exec awk -f <(sed '1,/^#__AWK__$/d' "$0") -- "$@"
+# ^-- This is to pass -h and --help to the script without passing it to awk directly
+# v-- sed will delete up to this next line and feed the rest of the file to awk (:
+#__AWK__
+
 
 # Read the output of NUMCBAS -> GTOBAS codes, which poduce files like
 #   # Function 1
@@ -16,6 +27,27 @@
 # This script prints the relative difference of each function and the total relative difference.
 # Column 1 is ignored
 
+function usage() {
+  print "Usage:\n\n" \
+        "    gtobas_refldiff FILE\n\n" \
+        "Print the per-function and total relative differences of numerical continuum functions\n" \
+        "and gaussian fits to those functions.\n\n" \
+        "`NUMCBAS` is used to determine numerical continuum solutions in electron-molecule\n" \
+        "scattering problems. `GTOBAS` finds gaussian fits to these. When chained together,\n" \
+        "`NUMCBAS` -> `GTOBAS` writes to file descriptor 13, producing the file `fort.13`,\n" \
+        "which contains the functions contatenated as follows:\n\n" \
+        "    # Function 1\n" \
+        "    x  ygauss  ynum\n" \
+        "    x  ygauss  ynum\n" \
+        "    ...............\n" \
+        "    # Function 2\n" \
+        "    x  ygauss  ynum\n" \
+        "    x  ygauss  ynum\n" \
+        "    ...............\n\n" \
+        "Options:\n\n" \
+        "    -h, --help     show this help message"
+}
+
 function print_fres() {
   if(!seen_function || n < 1) { return }
   printf "%s resl_L2 = %.8e\n", fname, sqrt(ferr2 / fref2)
@@ -26,6 +58,14 @@ function print_rel_l2(err2, ref2) {
 }
 
 BEGIN {
+  skip_end = 0
+  for (i=1; i < ARGC; i++) {
+    if (ARGV[i] == "-h" || ARGV[i] == "--help") {
+      usage()
+      skip_end = 1
+      exit 0
+    }
+  }
   total_err2 = 0
   total_ref2 = 0
   seen_function = 0
@@ -60,6 +100,7 @@ seen_function && NF >= 3 {
 }
 
 END {
+  if (skip_end) { exit 0 }
   print_fres()
   print "TOTAL:"
   printf "  npoints = %d\n", ntot
