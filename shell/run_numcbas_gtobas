@@ -1,0 +1,91 @@
+#!/usr/bin/env zsh
+
+PROGNAME="${0:t}"
+
+LVAL_DEFAULT=0
+NOEXP_DEFAULT=13
+ECMAX_DEFAULT=1.0
+CHARGE_DEFAULT=1.0
+RLIM_DEFAULT=17.0
+LVAL="${LVAL:-$LVAL_DEFAULT}"
+NOEXP="${NOEXP:-$NOEXP_DEFAULT}"
+ECMAX="${ECMAX:-$ECMAX_DEFAULT}"
+CHARGE="${CHARGE:-$CHARGE_DEFAULT}"
+RLIM="${RLIM:-$RLIM_DEFAULT}"
+
+usage() {
+
+cat <<help
+
+Usage:
+
+    $PROGNAME [options]
+
+Options:
+
+    -h, --help    show this message
+
+Environmental variables:
+
+    LVAL   Angular momentum value
+    NOEXP  Number of Gaussian exponents
+    ECMAX  Naximum NUMCBAS energy in Rydberg
+    CHARGE Target charge in atomic units
+    RLIM   R-matrix radius
+
+  Omitting these will will set following defaults:
+
+    LVAL:   $LVAL
+    NOEXP:  $NOEXP
+    ECMAX:  $ECMAX
+    CHARGE: $CHARGE
+    RLIM:   $RLIM
+
+Example:
+
+    LVAL=2 NOEXP=11 ECMAX=4.0 CHARGE=0 RLIM=15 ./$PROGNAME
+
+help
+}
+
+
+rlimp2=$((RLIM + 2.0))
+
+[[ CHARGE -eq 0 ]] && title="Neutral target" || title="Charged target"
+
+# -- check for help
+for arg in "$@" ; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+  esac
+done
+
+cat > basis.data << EOF
+&INPUT
+ title="$title",
+ ecmax=$ECMAX, !Maximum energy of the numerical eigenfunctions
+ lval=$LVAL,    !angular momentum
+ rlim=$rlimp2, !radial domain limit: this is recommended to be R-matrix radius + 2
+ charge=$CHARGE,!charge of the target
+ /
+EOF
+
+bat basis.data
+numcbas < basis.data  > l$LVAL-numcbas.out
+
+cat > gtobas.data << EOF
+ &FIT
+ noexp=$NOEXP,     !number of exponents
+ iguess=2,    !type of initial guess: leave as is
+ nplot=1,     !output flag
+ iprint=1,    !output flag
+ /
+EOF
+
+bat gtobas.data
+gtobas < gtobas.data > l$LVAL-gtobas.out
+[[ -e fort.17 ]] && mv fort.17 l$LVAL-graphs
+[[ -e fort.18 ]] && mv fort.18 l$LVAL-swmol3
