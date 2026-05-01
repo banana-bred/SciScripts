@@ -1,5 +1,8 @@
 #!/usr/bin/env zsh
 
+[[ -z "$(command -v numcbas)" ]] && {print -- -u2 "'numcbas' not detected on PATH"}
+[[ -z "$(command -v gtobas)" ]] && {print -- -u2 "'gtobas' not detected on PATH"}
+
 PROGNAME="${0:t}"
 
 LVAL_DEFAULT=0
