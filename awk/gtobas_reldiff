@@ -1,0 +1,67 @@
+#!/usr/bin/env -S awk -f
+
+# Read the output of NUMCBAS -> GTOBAS codes, which poduce files like
+#   # Function 1
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#   # Function 2
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#   x   ygauss   ynum
+#
+# Where ygauss is a gaussian fit to the numerical solution ynum for continuum functions.
+# This script prints the relative difference of each function and the total relative difference.
+# Column 1 is ignored
+
+function print_fres() {
+  if(!seen_function || n < 1) { return }
+  printf "%s resl_L2 = %.8e\n", fname, sqrt(ferr2 / fref2)
+}
+
+function print_rel_l2(err2, ref2) {
+  return (ref2 > 0) ? sprintf("%.8e", sqrt(err2 / ref2)) : "NaN"
+}
+
+BEGIN {
+  total_err2 = 0
+  total_ref2 = 0
+  seen_function = 0
+  ntot=0
+}
+
+# -- New function block
+/^[[:space:]]#[[:space:]]Function/ {
+  print_fres()
+
+  fname = $0
+  ferr2 = 0
+  fref2 = 0
+  n = 0
+  seen_function=1
+  next
+}
+
+# -- Data format:
+# x    yfit    ynum
+seen_function && NF >= 3 {
+  gauss = $2
+  sol = $3
+  diff = gauss - sol
+  ferr2 += diff  * diff
+  fref2 += sol   * sol
+  total_err2 += diff  * diff
+  total_ref2 += sol   * sol
+
+  n++
+  ntot++
+}
+
+END {
+  print_fres()
+  print "TOTAL:"
+  printf "  npoints = %d\n", ntot
+  printf "  resl_L2 = %s\n", print_rel_l2(total_err2, total_ref2)
+}
