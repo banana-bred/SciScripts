@@ -88,14 +88,16 @@ numcbas < basis.data  > l$LVAL-numcbas.out || die "numcbas failed"
 # -- determine number of solutions based on output, update NOEXP if necessary
 NOEXP_ACTUAL="$(awk '/No\. of eigensolutions/ { print $NF }' l"$LVAL"-numcbas.out)"
 
-if [[ NOEXP_ACTUAL > NOEXP ]] ; then
+if [[ NOEXP_ACTUAL -gt NOEXP ]] ; then
   print -u2 -- "WARN: user requested $NOEXP exponents, but $NOEXP_ACTUAL were detected. NOEXP should be at least that large."
   print -u2 -- "      Setting NOEXP=$NOEXP_ACTUAL."
+  NOEXP="$NOEXP_ACTUAL"
 fi
+
 
 cat > gtobas.data << EOF
  &FIT
- noexp=$NOEXP_ACTUAL,     !number of exponents
+ noexp=$NOEXP,     !number of exponents
  iguess=2,    !type of initial guess: leave as is
  nplot=1,     !output flag
  iprint=1,    !output flag
