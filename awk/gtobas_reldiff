@@ -53,6 +53,17 @@ function print_fres() {
   printf "%s resl_L2 = %.8e\n", fname, sqrt(ferr2 / fref2)
 }
 
+function set_max_fres() {
+  if(!seen_function || n < 1) { return }
+  fres_L2 = fref2 > 0 ? sqrt(ferr2 / fref2) : "0.0"
+  if(fres_L2 > max_resl_L2) { max_resl_L2 = fres_L2 }
+}
+
+function print_max_fres() {
+  if(!seen_function || n < 1) { return }
+  return (max_resl_L2 > 0) ? sprintf("%.8e", max_resl_L2) : "NaN"
+}
+
 function print_rel_l2(err2, ref2) {
   return (ref2 > 0) ? sprintf("%.8e", sqrt(err2 / ref2)) : "NaN"
 }
@@ -68,13 +79,19 @@ BEGIN {
   }
   total_err2 = 0
   total_ref2 = 0
+  max_resl_L2 = 0
   seen_function = 0
   ntot=0
+  n=0
+  ferr2 = 0
+  fres2 = 0
+  seen_function=0
 }
 
 # -- New function block
 /^[[:space:]]#[[:space:]]Function/ {
   print_fres()
+  set_max_fres()
 
   fname = $0
   ferr2 = 0
@@ -105,4 +122,6 @@ END {
   print "TOTAL:"
   printf "  npoints = %d\n", ntot
   printf "  resl_L2 = %s\n", print_rel_l2(total_err2, total_ref2)
+  printf "  max individual resl_L2 = %s\n", print_max_fres()
+
 }
