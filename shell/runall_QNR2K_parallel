@@ -1,0 +1,107 @@
+#!/usr/bin/env zsh
+emulate -L zsh
+setopt extendedglob
+
+PROGRAM=${0:t}
+self=${0:A}
+
+# -- this script calls itself through `parallel`. Each jobs runs in zsh
+
+# Run ONE item inside ONE directory.  Args: <dir> <item>
+if [[ $1 == --run-item ]]; then
+  dir=$2 item=$3
+  typeset -A names=( singlet 1 doublet 2 triplet 3 quartet 4 )
+  cd -- "$dir" || exit 1
+  print "=============================="
+  print -- "Running $item in $dir"
+  print "=============================="
+  ./"$item" || exit 1
+  cd output || exit 1
+  mkdir -p all
+  for f in "$item"/output/*.kmat(N); do
+    basef="${f:t}"
+    spinmult="${${basef#*.}%%.*}"   # singlet  -> names[singlet]=1
+    sym="${basef#*.*.}"             # A1_R2K.kmat
+    sym="${sym%%_*}"                # A1
+    newf="${names[$spinmult]}${sym}.kmat"   # 1A1.kmat
+    cp -- "$f" "all/${newf}"
+  done
+  exit 0
+fi
+
+############
+### MAIN ###
+############
+
+ncpu=$(nproc)
+: ${JOBS:=$ncpu}
+: ${OMP_NUM_THREADS:=$(( ncpu >= JOBS ? ncpu / JOBS : 1 ))}
+: ${OPENBLAS_NUM_THREADS:=1}
+export OMP_NUM_THREADS OPENBLAS_NUM_THREADS
+
+usage() {
+  cat <<help
+
+$PROGRAM
+
+    Run every *let.* executable (singlet.A1, triplet.App) in a QNR2K directory
+    (code of David Hvizdos) in parallel, then collect the produced .kmat files into an 'all'
+    subdirectory of 'output' with renamed files
+
+USAGE
+
+    $PROGRAM [OPTIONS] -- DIRS
+
+    DIRS can be several directories separated by spaces, a single directory, or a glob
+    Use -- to prevent weirdly named directories being interpreted as options
+
+OPTIONS
+
+    -h,--help    show this message
+
+ENVIRONMENTAL VARIABLES
+
+    This script uses the following environmental variables, which can be overwritten,
+    to determine parallelization:
+
+    JOBS                  Max number of parallel jobs  [default: result of nproc ($(nproc))]
+       |-----------------> current value: $JOBS
+    OMP_NUM_THREADS       OpenMP threads per job   [default: nproc / JOBS ($(( $(nproc) / JOBS )))]
+       |-----------------> current value: $OMP_NUM_THREADS
+    OPENBLAS_NUM_THREADS  OpenBLAS threads per job [default: 1]
+       |-----------------> current value: $OPENBLAS_NUM_THREADS
+
+    If only  4 jobs are needed, then only 4 jobs are spawned. In this case, jobs does not have to
+    be changed, but the other environmental variables can be changed to give each jobs more threads.
+
+help
+}
+
+die() {
+  local message="$1"
+  usage
+  print -u2 -- "ERROR: $message"
+  exit 1
+}
+
+(( $# )) || die 'No directories given !'
+zparseopts -D -E -F h=help, -help=help
+(( $#help )) && { usage ; exit 0 ; }
+
+# -- resolve to absolute paths
+typeset -a dirs
+for d in "$@" ; do
+  if [[ -d $d ]]; then
+    dirs+=( ${d:A} )
+  else
+    print -u2 -- "Skipping $d (not a directory)"
+  fi
+done
+(( $#dirs )) || { print -u2 -- 'No valid directories.' ; exit 1 }
+
+# -- run every (dir, item) pair in parallel.
+for dir in $dirs ; do
+  for item in $dir/*let.??(N) ; do
+    print -r -- "$dir"$'\t'"${item:t}"
+  done
+done | parallel -j "$JOBS" --colsep '\t' zsh "$self" --run-item {1} {2}

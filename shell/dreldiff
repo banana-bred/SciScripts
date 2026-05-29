@@ -25,7 +25,9 @@ OPTIONS
 
     -h, --help          show this message
     -p, --pattern PAT   the pattern to match with ZSH pattern matching
-    --noextra           if supplied, DIRX are not allowed to have extra files (also affected by pattern)
+    --noextra           if supplied, DIRX are not allowed to have extra files (also affected by pattern). Cannot be used with '--use-minimal'
+    --allow-missing     if supplied, DIRX are allowed to have missing files that are not in BASE_DIR
+    --use-minimal       if supplied, choose only the subset of files that is in BASE_DIR and all DIRX. Cannot be used with '--noextra'
     -c, --column  COL   the column in each file to be compared (default 2)
     --printall          if supplied, print info for all files
     --nmax        NMAX  print the NMAX biggest differences. Defaults to 1, prints no MAX when set to 0,
@@ -112,6 +114,8 @@ main() {
     -noextra=noextraopt \
     c:=colopt -column:=colopt \
     -printall=printallopt \
+    -allow-missing=allowmissingopt \
+    -use-minimal=useminopt \
     -nmax:=nmaxopt \
     p:=patopt -pattern:=patopt || exit 1
 
@@ -120,11 +124,14 @@ main() {
   [[ "$#" -lt 2 ]] && die "Not enough directories supplied for comparison"
   local pattern="" ; (( ${#patopt} ))     && pattern="${patopt[-1]}"
   local noextra=0  ; (( ${#noextraopt} )) && noextra=1
+  local allowmissing=0 ; (( ${#allowmissingopt} )) && allowmissing=1
+  local useminimal=0 ; (( ${#useminopt} )) && useminimal=1
   local printall=0 ; (( ${#printallopt} )) && printall=1
   local col=2      ; (( ${#colopt} ))     && col="${colopt[-1]}"
   [[ "$col" == <1-> ]] || die "The target column ($col) must be a positive integer"
   local nmax=1     ; (( ${#nmaxopt} ))   && nmax="${nmaxopt[-1]}"
   [[ "$nmax" -eq -1 || "$nmax" == <0-> ]] || die "nmax ("$nmax") must be greater than -1"
+  (( useminimal && noextra )) && die "Options '--use-minimal' and '--noextra' are incompatible"
 
   command -v reldiff > /dev/null || die 'reldiff not found on PATH'
 
@@ -151,9 +158,9 @@ main() {
   print
   local dir
   for dir in "${COMPDIRS[@]}" ; do
-    print -- "    Comparing with: $dir"
     [[ -e "$dir" ]] || die 'Directory not found !'
-    [[ -d "$dir" ]] || die "$dir"' is not a directory !'
+    [[ -d "$dir" ]] || { print -u2 -- "$dir"' is not a directory ! Skipping.'; continue }
+    print -- "    Comparing with: $dir"
   done
 
   # -- collect filenames
@@ -162,13 +169,36 @@ main() {
 
   (( ${#BASEFILES} )) || die "No matching files !. No regular files or not matching files in $BASEDIR"
 
+  # -- get intersection of files if useminimal
+  if (( useminimal )) ; then
+    local -a common=( "${BASEFILES[@]}" )
+    local -a cfiles kept
+    local cdir cfile
+    for cdir in "${COMPDIRS[@]}" ; do
+      [[ -d "$cdir" ]] || continue
+      cfiles=( "${(@f)$(_collect_files "$cdir" "$pattern")}" )
+      kept=()
+      for cfile in "${common[@]}" ; do
+        (( ${cfiles[(Ie)$cfile]} )) && kept+=("$cfile")
+      done
+      common=( "${kept[@]}" )
+    done
+    BASEFILES=( "${common[@]}" )
+    (( ${#BASEFILES} )) || die "No files common to all directories"
+    print -- "  Using a minimal common set of ${#BASEFILES} files"
+  fi
+
   # -- check that we have all the files that we want in each dir (and possibly respect --noextra)
   local -a COMPFILES
   local file
   for dir in "${COMPDIRS[@]}" ; do
 
+    [[ -d "$dir" ]] || continue
     for file in "${BASEFILES[@]}" ; do
-      [[ -f "$dir/$file" ]] || die "Missing files in $dir: $file"
+      [[ -f "$dir/$file" ]] || {
+        (( allowmissing )) && { print -u2 -- "Missing file in $dir: $file. Skipping" ; continue }
+        die "Missing files in $dir: $file"
+      }
     done
 
     # -- noextra
@@ -187,6 +217,7 @@ main() {
   # -- compare files
   for dir in "${COMPDIRS[@]}" ; do
 
+    [[ -d "$dir" ]] || continue
     local dref2=0.0
     local derr2=0.0
     local -i dnpts=0
@@ -208,6 +239,9 @@ main() {
     fi
 
     for file in "${BASEFILES[@]}" ; do
+
+      # -- skip files that are missing. if we got this far, it's because they're allowed to be missing
+      [[ -f "$dir/$file" ]] || continue
 
       res="$(reldiff -v col="$col" -v header=0 "$BASEDIR/$file" "$dir/$file")" || die "Failed to compare $BASEDIR/$file and $dir/$file"
 

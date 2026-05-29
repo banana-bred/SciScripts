@@ -1,0 +1,36 @@
+#!/usr/bin/env zsh
+
+all="$@"
+[[ -z "$all" ]] && { print -u2 -- 'No directories given !' ; exit 1}
+
+setopt extendedglob
+base="$(pwd)"
+
+ncpu=$(nproc)
+: ${OMP_NUM_THREADS:=$ncpu}
+: ${OPENBLAS_NUM_THREADS:=1}
+export OMP_NUM_THREADS OPENBLAS_NUM_THREADS
+
+typeset -A names=( singlet 1 doublet 2 triplet 3 quartet 4 )
+
+for dir in ${=all} ; do
+  cd "$dir" || continue
+  for item in *let.??  ; do
+    print "=============================="
+    print --  "Running $item in $dir"
+    print "=============================="
+    ./"$item" || continue
+    cd output
+    mkdir -p all
+    for f in *let.??/output/*.kmat ; do
+      basef="${f:t}"
+      spinmult="${${basef#*.}%%.*}"  # 1 from n_.singlet.A1_R2K.kmat
+      sym="${basef#*.*.}"  # A1_R2K.kmat
+      sym="${sym%%_*}" # A1
+      newf="${names[$spinmult]}${sym}.kmat" #1A1.kmat
+      cp -- "$f" "all/${newf}"
+    done
+    cd ..
+  done
+  cd "$base"
+done
