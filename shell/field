@@ -1,0 +1,77 @@
+#!/usr/bin/env sh
+
+PROGNAME="$(basename "$0")"
+comment='#'
+
+usage(){
+cat << help
+
+$PROGNAME
+
+    Prints field (column) N of a file
+
+USAGE: $PROGNAME [OPTIONS] FILE N
+
+OPTIONS
+
+    -h,--help           Show this message
+    -c,--comment CHAR   Comment prefix to skip (default: #)
+
+help
+}
+
+die(){
+  usage
+  printf 'ERROR: %s\n' "$1" >&2
+  exit 1
+}
+
+# -- command line args
+while :; do
+  case $1 in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -c|--comment)
+      if [ -n "$2" ] ;then
+        comment="$2"
+        shift
+      else
+        die "--comment requires an argument"
+      fi
+      ;;
+    --comment=*)
+      comment="${1#*=}"
+      ;;
+    -c?*)
+      comment="${1#-c}"
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -?*)
+      printf 'WARN: Unknown option (ignored): %s\n' "$1" >&2
+      ;;
+    *)
+      break
+      ;;
+  esac
+  shift
+done
+
+file="$1"
+field="$2"
+
+[ -z "$file" ] && die "Please supply a file to read"
+[ -z "$field" ] && die "Please supply a field number"
+[ -f "$file" ] || die "File not found: $file"
+case "$field" in
+  ''|*[!0-9]*) die "Please supply a valid field number (1,2..)";;
+esac
+
+awk -v c="$field" -v cmt="$comment" '
+  index($0, cmt) == 1 { next }
+  { print $c }
+' "$file"

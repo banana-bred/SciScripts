@@ -85,7 +85,7 @@ die() {
 }
 
 (( $# )) || die 'No directories given !'
-zparseopts -D -E -F h=help, -help=help
+zparseopts -D -E -F h=help -help=help
 (( $#help )) && { usage ; exit 0 ; }
 
 # -- resolve to absolute paths
@@ -100,8 +100,11 @@ done
 (( $#dirs )) || { print -u2 -- 'No valid directories.' ; exit 1 }
 
 # -- run every (dir, item) pair in parallel.
+print -r -- "JOBS:                 $JOBS"
+print -r -- "OMP_NUM_THREADS:      $OMP_NUM_THREADS"
+print -r -- "OPENBLAS_NUM_THREADS: $OPENBLAS_NUM_THREADS"
 for dir in $dirs ; do
-  for item in $dir/*let.??(N) ; do
+  for item in $dir/*let.??*(N) ; do
     print -r -- "$dir"$'\t'"${item:t}"
   done
 done | parallel -j "$JOBS" --colsep '\t' zsh "$self" --run-item {1} {2}
