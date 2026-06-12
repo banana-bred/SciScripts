@@ -88,16 +88,27 @@ OPTIONS
 
   [--RP  RPROP]                R-matrix propagation distance
   [--NI  NINTERV]              Number of bspline intervals if propagating
-  [--ELO ElO]                  Lowest energy with respect to chosen target state in eV.
-  [--EHI EHI]                  Highest energy with respect to chosen target state in eV.
   [--ET  ETYPE]                Type of energy grid (see ETYPE in mod_Egrid.f90 for more information).
                                ETYPE=2: equidistant effective quantum number grid
                                         ν / 1/sqrt(-2E)
                                ETYPE=3: logarithmic energy grid, shifted by etarg(basetarg)
+                               ETYPE=4: segmented linear equidistant grid
                                ETYPE=else: linear equidistant grid
-  [--GS  GROUND_STATE]         Target state chosen as "0 of Egrid".
+  [--NS  NESEG]                The number of energy grid segments. This must match the sizes of
+                               ELO, EHI, and ESTEP_SIZE arrays.
+  [--ELO ElO]                  Lowest energy with respect to chosen target state in eV.
+                               If ETYPE is 4, this is a comma-separated array of the left boundaries
+                               of each energy grid segment.
+  [--EHI EHI]                  Highest energy with respect to chosen target state in eV.
+                               If ETYPE is 4, this is a comma-separated array of the right boundaries
+                               of each energy grid segment.
   [--DE  ESTEP_SIZE]           Energy step size in eV (for non-equidistant grids see mod_Egrid.f90).
-                               If ETYPE=3, then this is the number of energy points
+                               If ETYPE=3, then this is the number of energy points.
+                               If ETYPE is 4, this is a comma-separated array of the energy step
+                               for each energy grid segment.
+  [--GS  GROUND_STATE]         Target state chosen as "0 of Egrid".
+  [--FOGS]                     Force Open Ground State. If present, sets OPT1 to 1 for ground state
+                               channels (n=GROUND_STATE)
 
 
 HELP
@@ -173,6 +184,12 @@ _normalizeToCsv() {
   print -r -- "${(j:,:)cleaned}"
 }
 
+_countCsv() {
+  [[ -z "$1" ]] && { print -r -- 0 ; return 0 ; }
+  local -a v=( "${(s:,:)1}" )
+  print -r -- "$#v"
+}
+
 _copyTemplates() {
   ## Copy template files into output directory
 
@@ -203,7 +220,7 @@ _copyTemplates() {
 
   # -- populate with template stuff
   mkdir -p "$outputDir"/{input,output}
-  cp "$templateDir"/{GEOMS.dat,Whitt*.dat,SPIN_IRREP.init} "$outputDir"/input/.
+  cp "$templateDir"/{GEOMS.dat,Whitt*.dat,SPIN_IRREP.init,SPIN_IRREP.NESEG.init} "$outputDir"/input/.
   cp "$templateDir"/SPIN_IRREP "$outputDir"/.
 
 }
@@ -273,7 +290,7 @@ main() {
 
   # -- parse options
   local -a Help basedirOpt forceOpt fillOpt existingOpt interactiveOpt
-  local -a eloOpt ehiOpt estepSizeOpt etypeOpt groundStateOpt degenStatesOpt rpropOpt
+  local -a eloOpt ehiOpt estepSizeOpt etypeOpt groundStateOpt degenStatesOpt rpropOpt nesegOpt fogsOpt
   zparseopts -E -D \
     h=Help -help=Help \
     s=symlinkOpt -symlink=symlinkOpt \
@@ -284,12 +301,14 @@ main() {
     i=interactiveOpt -interactive=interactiveOpt \
     -RP:=rpropOpt \
     -NI:=nintervOpt \
+    -NS:=nesegOpt \
     -ELO:=eloOpt \
     -EHI:=ehiOpt \
     -DE:=estepSizeOpt \
     -ET:=etypeOpt \
     -GS:=groundStateOpt \
-    -DS:=degenStatesOpt
+    -DS:=degenStatesOpt \
+    -FOGS=fogsOpt
 
   (( "${#Help}" )) && {_usage; return 0}
 
@@ -300,6 +319,7 @@ main() {
 
   # -- flags
   local force=0       ; (( ${#forceOpt} ))       && force=1
+  local fogs=0        ; (( ${#fogsOpt} ))        && fogs=1
   local symlink=0     ; (( ${#symlinkOpt} ))     && symlink=1
   local existing=0    ; (( ${#existingOpt} ))    && existing=1
   local fill=0        ; (( ${#fillOpt} ))        && fill=1
@@ -366,11 +386,23 @@ main() {
         ETYPE=1 → equidistant linear grid
         ETYPE=2 → quantum defects ν = -/sqrt(-2E)
         ETYPE=3 → logarithmic energy grid
+        ETYPE=4 → segmented equidistant linear grid
       ETYPE = " "$ETYPE"
+    if (( ETYPE == 4 )) ; then
+      _promptUserVarInput NESEG "Please enter a value for the number of energy grid segments"
+      _promptUserVarInput ELO "Please enter $NESEG ELO values (eV)"
+      _promptUserVarInput EHI "Please enter $NESEG EHI values (eV)"
+      _promptUserVarInput ESTEP_SIZE "Please enter $NESEG ESTEP_SIZE values (eV)"
+    else
+      (( $#nsegOpt )) && _die "--NS only valid alongside --ET 4"
+      _promptUserVarInput ELO "Please enter a value for ELO (eV)"
+      _promptUserVarInput EHI "Please enter a value for EHI (eV)"
+      _promptUserVarInput ESTEP_SIZE "Please enter a value (or multiple if ETYPE=4) for ESTEP_SIZE (eV)"
+    fi
     _promptUserVarInput GROUND_STATE "Please enter a value for GROUND_STATE (leave blank for default)" "$GROUND_STATE"
-    _promptUserVarInput ELO "Please enter a value for ELO (eV)"
-    _promptUserVarInput EHI "Please enter a value for EHI (eV)"
-    _promptUserVarInput ESTEP_SIZE "Please enter a value for ESTEP_SIZE (eV)"
+    local reply=""
+    _promptUserVarInput reply "Force-open ground-state channels? [y/N]" "N"
+    [[ "${reply:l}" == y* ]] && fogs=1
     # _promptUserVarInput DEGEN_STATES "Please enter the electronic state number accounting for their degeneracy, separated by commas or spaces, e.g.
     #     ¹Σ⁺,³Π —→ DEGEN_STATES = 1 2 2 (Π doubly degenerate)
     #     ³Σ⁻, ¹Δ, ³Π, ¹Σ⁺ —→ DEGEN_STATES = 1,2,2,3,3,4 (Δ and Π doubly degenerate)
@@ -387,15 +419,29 @@ main() {
     _addOpt NINTERV "$NINTERV"
   else
     # -- fill if supplied by user
-    (( ${#eloOpt} ))         && ELO="${eloOpt[-1]}"                                     && _addOpt ELO "$ELO"
-    (( ${#ehiOpt} ))         && EHI="${ehiOpt[-1]}"                                     && _addOpt EHI "$EHI"
-    (( ${#estepSizeOpt} ))   && ESTEP_SIZE="${estepSizeOpt[-1]}"                        && _addOpt ESTEP_SIZE "$ESTEP_SIZE"
-    (( ${#etypeOpt} ))       && ETYPE="${etypeOpt[-1]}"                                 && _addOpt ETYPE "$ETYPE"
-    (( ${#groundStateOpt} )) && GROUND_STATE="${groundStateOpt[-1]}"                    && _addOpt GROUND_STATE "$GROUND_STATE"
+    (( ${#etypeOpt} ))       && ETYPE="${etypeOpt[-1]}"
+      _addOpt ETYPE "$ETYPE"
+    (( ${#nesegOpt} ))       && (( ETYPE != 4 )) && _die "ETYPE=$ETYPE and --NS are incompatible options"
+    (( ${#nesegOpt} ))       && NESEG="${nesegOpt[-1]}"                                 && _addOpt NESEG "$NESEG"
+    (( ${#eloOpt} ))         && ELO="$(_normalizeToCsv "${eloOpt[-1]}")"                && _addOpt ELO "$ELO"
+    (( ${#ehiOpt} ))         && EHI="$(_normalizeToCsv "${ehiOpt[-1]}")"                && _addOpt EHI "$EHI"
+    (( ${#estepSizeOpt} ))   && ESTEP_SIZE="$(_normalizeToCsv "${estepSizeOpt[-1]}")"   && _addOpt ESTEP_SIZE "$ESTEP_SIZE"
+    (( ${#groundStateOpt} )) && GROUND_STATE="${groundStateOpt[-1]}"
+      _addOpt GROUND_STATE "$GROUND_STATE"
     # (( ${#degenStatesOpt} )) && DEGEN_STATES="$(_normalizeToCsv "$degenStatesOpt[-1]")" && _addOpt DEGEN_STATES "$DEGEN_STATES"
     (( ${#rpropOpt} ))       && RPROP="${rpropOpt[-1]}"                                 && _addOpt RPROP "$RPROP" || RPROP=0
     (( ${#rpropOpt} ))       && DO_RPROP=1 || DO_RPROP=0
     (( ${#rpropOpt} )) && { (( ${#rpropOpt} && ${#nintervOpt} )) && NINTERV="${nintervOpt[-1]}" && _addOpt NINTERV "$NINTERV" || _die "Must define NINTERV if propagating" } || NINTERV=0
+  fi
+
+  if ((ETYPE == 4 )) ; then
+    (( NESEG >= 1 )) || _die "ETYPE=4 requires --NS >= 1"
+    local -i nel="$(_countCsv "$ELO")"
+    local -i neh="$(_countCsv "$EHI")"
+    local -i nes="$(_countCsv "$ESTEP_SIZE")"
+    (( nel == NESEG )) || _die "NESEG ($NESEG) must match number of ELO: $nel"
+    (( neh == NESEG )) || _die "NESEG ($NESEG) must match number of EHI: $neh"
+    (( nes == NESEG )) || _die "NESEG ($NESEG) must match number of ESTEP_SIZE: $nes"
   fi
 
   # -- fill the SPIN_IRREP script template
@@ -422,7 +468,9 @@ main() {
     chmod --reference="$template" "$filename"
 
     # -- fill the SPIN_IRREP.init template
-    local template="${outputDir}/input/SPIN_IRREP.init"
+    local neseg_str=""
+    (( ETYPE == 4 )) && neseg_str=".NESEG"
+    local template="${outputDir}/input/SPIN_IRREP${neseg_str}.init"
     local filename="${outputDir}/input/${spinmult}${irrep}.init"
 
     # -- determine the POINT_GROUP from UKRmol+ output
@@ -476,7 +524,6 @@ main() {
     [[ $RPROP == ([-+])#<-> ]] && RPROP="${RPROP}.0"
 
     # -- fill the SPIN_IRREP.init template with non-channel info
-    local template="${outputDir}/input/SPIN_IRREP.init"
     local filename="${outputDir}/input/${spinmult}${irrep}.init"
     cp "$template" "$filename"
     _fillTemplate "${filename}" \
@@ -506,9 +553,11 @@ main() {
       local chl="$(printf '%4d' "${l[$ichan]}" )"
       local chλ="$(printf '%4d' "${λ[$ichan]}" )"
       local che="${eRyd[$ichan]}"
+      local opt1="$OPT1_DEFAULT"
+      (( fogs )) && (( ${nelec[$ichan]} == GROUND_STATE )) && opt1=1
       local args=( "$channelTemplate"
         ICHAN="$chi"
-        OPT1="$OPT1_DEFAULT"
+        OPT1="$opt1"
         OPT2="$OPT2_DEFAULT"
         OPT3="$OPT3_DEFAULT"
         NELEC="$chn"
