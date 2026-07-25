@@ -11,7 +11,7 @@ set_num_threads(8)
 NDISP = 81
 QMAX = 2 # -- max mode displacement in each direction. Q=±1 are the classical turning points for ν=0
 NMODES = None
-CENTER = "charge" # -- charge, mass, none
+CENTER = "charge0" # -- charge0, charge, mass, none
 METHOD_MODES = "ccsd(t)"
 METHOD_ENERGY = "ccsd(t)"
 BASIS = "cc-pvtz"
@@ -28,6 +28,8 @@ if CENTER == "mass":
   center_label = CENTER
 elif CENTER == "charge":
   center_label = "dipole(μ->0)"
+elif CENTER == "charge0":
+  center_label = "dipole(μ->0) at equilibrium only, fixed origin"
 elif CENTER == "none":
   center_label = "none"
 else:
@@ -202,6 +204,11 @@ Xtp0   = np.array(fa["Xtp0"].data)    # turning point v=0 amplitude (a₀) (nDOF
 
 natoms   = mol0.natom()
 geom0 = np.array(mol0.geometry())             # Equilibrium a₀
+
+if CENTER == "charge0":
+  geom0, μ0, _ = recenter_to_zero_dipole(geom0, mol0)
+  psi4.core.print_out(f"charge0: |μ(q0)| was {np.linalg.norm(μ0):.8f} ea₀; origin now fixed for all Q\n")
+
 symbols = [mol0.symbol(i) for i in range(natoms)]
 M = np.array([mol0.mass(i) for i in range(natoms)], dtype=float)
 bohr2ang = psi4.constants.bohr2angstroms
@@ -254,6 +261,8 @@ for imode, midx in enumerate(vib_idx, start=1):
         E = energy_on_geom(geom, mol0)
       elif CENTER == "charge":
         geom, μ, E = recenter_to_zero_dipole(geom, mol0)
+      elif CENTER == "charge0":
+        E = energy_on_geom(geom, mol0)
 
       geomA = geom * bohr2ang
       Vrel, _ = convert_energy(E - E0, EUNIT)

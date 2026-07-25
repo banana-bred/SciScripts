@@ -25,8 +25,9 @@ typeset -gA _IRREP_NUMBERS=(
   A1 1 A2 2 B1 3 B2 4
   Ap 1 App 2)
   # Irrep name → number ( A1 → 1 )
-typeset -gi OPT1_DEFAULT=0 OPT2_DEFAULT=4 OPT3_DEFAULT=1
+typeset -gi OPT1_DEFAULT=0 OPT2_DEFAULT=4 OPT3_DEFAULT=1 CHTHR_D
   # Defaults for OPT{1,2,3} in SPIN_IRREP.init
+typeset -g CHTHR_DEFAULT=0.0
 typeset -gi GROUND_STATE=1
   # Ground state used as the 0 of the energy grid
 #################################################
@@ -560,6 +561,7 @@ main() {
         OPT1="$opt1"
         OPT2="$OPT2_DEFAULT"
         OPT3="$OPT3_DEFAULT"
+        CHTHR="$CHTHR_DEFAULT"
         NELEC="$chn"
         LORB="$chl"
         LAMBDA="$chλ"

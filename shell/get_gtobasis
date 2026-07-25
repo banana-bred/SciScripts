@@ -131,6 +131,9 @@ _auto_find_noexp() {
 
     mkdir -p l"$l"
 
+    # -- reset
+    noexp_min=""
+
     print --
     print -- "Running NUMCBAS for l = $l"
     print --
@@ -177,13 +180,13 @@ _auto_find_noexp() {
 
         mv fort.17 l"$l"/noexp$noexp-graphs
 
-        [[ "$mindiff" == "DNE" ]] && { mindiff="$mindiff_found" ; noexp_min="$noexp" }
-        [[ mindiff_found -lt mindiff ]] && { mindiff="$mindiff_found" ; noexp_min="$noexp" }
+        [[ "$mindiff" == "DNE" ]]     && { mindiff="$mindiff_found" ; noexp_min="$noexp" }
+        (( mindiff_found < mindiff )) && { mindiff="$mindiff_found" ; noexp_min="$noexp" }
 
       else
         mindiffs["${noexp}"]="DNE"
         print -- '  GTOBAS Failed ! Likely too many exponents for this configuration.'
-        print -- '  Skipping all noexp >= $noexp'
+        print -- "  Skipping all noexp >= $noexp"
         break
       fi
 
@@ -191,6 +194,7 @@ _auto_find_noexp() {
 
     done
 
+    [[ -z "$noexp_min" ]] && die "No successful GTOBAS fit for l=$l. Check l$l/gtobas.out"
     print --
     print -- "  Best number of Gaussians: $noexp_min"
     print -- "  Minimal L2 norm difference: ${mindiffs["$noexp_min"]}"
@@ -291,14 +295,13 @@ main() {
     print
     print -- "    Manual continuum basis requested"
     print
-    local nlvals="$(( lmax - lmin + 1 ))"
     [[ lmin -ne 0 ]] && die "lmin MUST be 0 in manual mode, because the basis assumes that we start at l=0"
     [[ nlvals -ne ${#noexps[@]} ]] && die "number of LVALS from LMIN to LMAX must be the same as the number of NOEXPs"
     # -- fill noexp_this_l manually
     for i in {1..$nlvals} ; do
       l=$(( i - 1 ))
       noexp="${noexps[$i]}"
-      noexp_this_l[${l}]="$noexp"
+      noexp_this_l[$l]="$noexp"
     done
   elif [[ "$manual_mode" == false ]] ; then
     # -- try to find the ideal noexp for each l automatically
@@ -309,13 +312,21 @@ main() {
 
   [[ lmin -ne 0 ]] && { print -r -- "LMIN ($lmin) is nonzer0; refusing to build a basis !" ; exit 1 }
 
+  noexp_vals=()
+  for l in {"$lmin".."$lmax"} ; do
+    noexp_vals+=( "$(awk '{print $4}' "l${l}/best-noexp")" )
+  done
+  noexps_csv="${(j:,:)noexp_vals}"
+
+  local nlvals="$(( lmax - lmin + 1 ))"
+
   gto_basis_header="$(_gto_basis_header "${nlvals}" "${noexps_csv}" "${rlim}" "${ecmax}")"
 
   [[ ! -z "${output[2]}" ]] && basis_file="${output[2]}" || basis_file="swmol3.continuum.q$chrg.r$rlim.L$lmax"
   print -r -- "$gto_basis_header" > "$basis_file"
 
   for l in {$lmin..$lmax} ; do
-    noexp="${noexp_this_l[$l]}"
+    noexp="$(awk '{print $4}' "l${l}/best-noexp")"
     swmol_file="l$l/noexp$noexp-swmol3"
     # -- check that the file exists ans it not 0B
     [[ -e "$swmol_file" ]] || die "basis file not found: $swmol_file"
